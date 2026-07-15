@@ -1,0 +1,8 @@
+node_modules/
+dist/
+logs/
+*.log
+.env
+bot_history.sqlite
+local.db
+.DS_Store
