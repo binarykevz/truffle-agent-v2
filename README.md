@@ -1,160 +1,100 @@
-# 🚀 Deployment Guide
+# 🤖 Truffle Agent — Self-Modifying Agentic Telegram Bot
 
-## Option A: VPS (Ubuntu/Debian) — Recommended
+A production-ready, database-driven agentic Telegram bot built with **Bun.js**, **Turso**, and **DashScope (Qwen)**. Features a self-modifying command system where the owner can add, edit, and delete bot features entirely through Telegram — with AI-powered code validation.
 
-### 1. Initial Setup
+## ✨ Features
+
+### 🧠 Core Agent
+- **ReAct agent loop** with persistent memory (Turso)
+- **Web crawling** for research
+- **Code generation + auto-deploy** (scripts or web servers)
+- **OpenClaw webhook integration**
+- **Device app launching** (Termux direct launch, VPS inline buttons)
+- **AI-driven file conversion** with interactive inline keyboards
+
+### 🏗️ Architecture
+- **Two isolated Turso databases** — users/config separated from commands
+- **Dynamic command system** — all commands stored in DB, not code
+- **AI code fixer** — auto-corrects syntax errors and API misuse before saving
+- **Single-owner access control** — hardcoded `OWNER_ID` in `.env`
+- **Multi-user management** via Telegram commands
+
+### 📄 File Conversion
+- PDF ↔ DOCX, TXT, PNG, JPG
+- JPG/JPEG ↔ PNG, WebP, PDF
+- HEIC → JPG, PNG
+- PPTX/XLSX → PDF
+- MP3 ↔ WAV, OGG, M4A
+- MP4 → GIF, MP3, AVI
+- ZIP ↔ 7Z, TAR.GZ
+
+## 🚀 Quick Start
+
+### 1. Install Bun
 ```bash
-sudo apt update && sudo apt upgrade -y
-
-# Install Bun
 curl -fsSL https://bun.sh/install | bash
 source ~/.bashrc
-
-# Install PM2
-bun add -g pm2
-
-# Install system dependencies for file conversion
-sudo apt install libreoffice ffmpeg p7zip-full zip -y
 ```
 
-### 2. Clone and Configure
+### 2. Clone and Install
 ```bash
-git clone <your-repo> ~/truffle-agent
-cd ~/truffle-agent
-bun install
-mkdir -p logs
-
-# Copy and edit .env
-cp .env.example .env
-nano .env
-```
-
-### 3. Start with PM2
-```bash
-pm2 start ecosystem.config.cjs
-pm2 save
-pm2 startup   # Follow the sudo command it outputs
-```
-
-### 4. Verify
-```bash
-pm2 status
-pm2 logs truffle-agent --lines 30
-```
-
-### 5. Useful PM2 Commands
-```bash
-pm2 logs truffle-agent              # Live logs
-pm2 restart truffle-agent           # Restart
-pm2 stop truffle-agent              # Stop
-pm2 monit                           # Monitor CPU/memory
-pm2 reload truffle-agent            # Zero-downtime reload
-```
-
-### 6. Log Rotation (Recommended)
-```bash
-pm2 install pm2-logrotate
-pm2 set pm2-logrotate:max_size 10M
-pm2 set pm2-logrotate:retain 7
-pm2 set pm2-logrotate:compress true
-```
-
----
-
-## Option B: Android (Termux)
-
-### 1. Install Ubuntu in Termux
-```bash
-pkg update && pkg upgrade -y
-pkg install proot-distro curl -y
-proot-distro install ubuntu
-proot-distro login ubuntu
-```
-
-### 2. Inside Ubuntu
-```bash
-apt update && apt upgrade -y
-apt install curl unzip libreoffice ffmpeg p7zip-full zip -y
-
-# Install Bun
-curl -fsSL https://bun.sh/install | bash
-source ~/.bashrc
-
-# Install PM2
-bun add -g pm2
-
-# Clone and setup
-cd ~
-git clone <your-repo> truffle-agent
+git clone <your-repo>
 cd truffle-agent
 bun install
 mkdir -p logs
-
-# Start
-pm2 start ecosystem.config.cjs
-pm2 save
 ```
 
-### 3. Prevent Android from Killing Termux
-1. **Acquire Wakelock**: Swipe down on Termux notification → "Acquire Wakelock"
-2. **Disable Battery Optimization**: Settings → Apps → Termux → Battery → Unrestricted
-3. **Display Over Other Apps**: Settings → Apps → Termux → Advanced → Allow
-
-### 4. Managing the Bot Later
+### 3. Install System Dependencies (for file conversion)
 ```bash
-proot-distro login ubuntu
-pm2 status
-pm2 logs truffle-agent
-pm2 restart truffle-agent
+sudo apt update
+sudo apt install libreoffice ffmpeg p7zip-full zip -y
 ```
 
----
-
-## 🔧 Troubleshooting
-
-### Bot keeps restarting
+### 4. Create Two Turso Databases
 ```bash
-pm2 logs truffle-agent --err --lines 50
+turso db create truffle-main
+turso db create truffle-commands
+turso db tokens create truffle-main
+turso db tokens create truffle-commands
 ```
-Common issues:
-- Missing `.env` variables
-- Turso database unreachable
-- Port conflicts
 
-### File conversion fails
-- **PDF/Office**: Ensure LibreOffice is installed (`which soffice`)
-- **Audio/Video**: Ensure FFmpeg is installed (`which ffmpeg`)
-- **Archives**: Ensure p7zip and zip are installed
+### 5. Configure `.env`
+```env
+TURSO_DATABASE_URL=libsql://truffle-main-your-org.turso.io
+TURSO_AUTH_TOKEN=your-main-db-token
+TURSO_COMMANDS_DATABASE_URL=libsql://truffle-commands-your-org.turso.io
+TURSO_COMMANDS_AUTH_TOKEN=your-commands-db-token
+OWNER_ID=6076887662
+BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+```
 
-### PM2 not found after reboot
-Add to `~/.bashrc`:
+### 6. Start the Bot
 ```bash
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
-```
-Then `source ~/.bashrc`.
-
----
-
-## 📊 Monitoring
-
-### Health Check
-```bash
-# Bot status
-pm2 status
-
-# Memory usage
-pm2 monit
-
-# Recent errors
-pm2 logs truffle-agent --err --lines 20
+bun run start
 ```
 
-### Database Health
-```bash
-# Check main DB
-turso db shell truffle-main "SELECT COUNT(*) FROM allowed_users;"
-
-# Check commands DB
-turso db shell truffle-commands "SELECT COUNT(*) FROM commands;"
+### 7. Configure via Telegram
+As the owner, send:
 ```
+/setconfig api_key sk-ws-H.XMPEHI...
+/setconfig base_url https://ws-xb91hlw222zwqslj.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+/setconfig model qwen-max
+```
+
+## 📚 Documentation
+
+- **[README_DEPLOYMENT.md](./README_DEPLOYMENT.md)** — VPS & Termux deployment guide
+- **[README_COMMANDS.md](./README_COMMANDS.md)** — Dynamic feature system guide
+
+## 🔒 Security
+
+- Owner ID is hardcoded in `.env` — cannot be changed via Telegram
+- Sensitive config values are masked in `/getconfig`
+- Owner cannot remove themselves
+- Unauthorized users are blocked at the middleware level
+- AI code fixer validates all user-submitted code before execution
+- Two isolated databases prevent command code from corrupting user data
+
+## 📜 License
+
+MIT
