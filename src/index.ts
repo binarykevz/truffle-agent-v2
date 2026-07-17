@@ -73,7 +73,7 @@ const conversionJobs = new Map<string, { filePath: string; fileName: string; ext
 
 async function main() {
     // Initialize all three databases
-    await Promise.all([initCommandsDB(), initUsersDB(), initMemoryDB()]);
+    await Promise.all([initMainDB(), initCommandsDB(), initMemoryDB()]);
     console.log("✅ All three databases initialized");
 
     const ownerId = await seedOwner();
