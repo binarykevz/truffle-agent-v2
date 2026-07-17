@@ -1,7 +1,7 @@
 import { Bot } from "grammy";
 import { runAgent, resetAgent } from "./agent";
 import {
-    initCommandsDB, initUsersDB, initMemoryDB,
+    initMainDB, initCommandsDB, initMemoryDB,
     seedOwner, getOwner, isOwner, isAllowedUser,
     addAllowedUser, removeAllowedUser, listAllowedUsers,
     getConfig, setConfig,
