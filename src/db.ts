@@ -1,10 +1,9 @@
 import { createClient, type Client } from "@libsql/client";
 
 // ============================================================
-// TURSO DATABASES (matching your .env exactly)
+// TURSO DATABASES
 // ============================================================
 
-// 1. Main Database (users, config, history)
 const mainUrl = process.env.TURSO_DATABASE_URL;
 if (!mainUrl) throw new Error("TURSO_DATABASE_URL is required in .env");
 export const mainDb: Client = createClient({
@@ -12,7 +11,6 @@ export const mainDb: Client = createClient({
     authToken: process.env.TURSO_AUTH_TOKEN || undefined,
 });
 
-// 2. Commands Database (isolated feature code)
 const commandsUrl = process.env.TURSO_COMMANDS_DATABASE_URL;
 if (!commandsUrl) throw new Error("TURSO_COMMANDS_DATABASE_URL is required in .env");
 export const commandsDb: Client = createClient({
@@ -20,11 +18,10 @@ export const commandsDb: Client = createClient({
     authToken: process.env.TURSO_COMMANDS_AUTH_TOKEN || undefined,
 });
 
-// 3. Memory Database
 const memoryUrl = process.env.TURSO_MEMORY_URL;
 export const memoryDb: Client = memoryUrl 
     ? createClient({ url: memoryUrl, authToken: process.env.TURSO_MEMORY_TOKEN || undefined })
-    : mainDb; // Fallback to mainDb if memory URL is empty
+    : mainDb;
 
 // ============================================================
 // SCHEMA INITIALIZATION
@@ -78,7 +75,6 @@ export async function initCommandsDB() {
 }
 
 export async function initMemoryDB() {
-    // Initialize memory DB schema if it's separate from mainDb
     if (memoryUrl && memoryUrl !== process.env.TURSO_DATABASE_URL) {
         await memoryDb.batch([
             `CREATE TABLE IF NOT EXISTS config (
@@ -102,7 +98,7 @@ export async function initMemoryDB() {
 }
 
 // ============================================================
-// CONFIG (using mainDb as per your .env comment)
+// CONFIG
 // ============================================================
 
 export async function getConfig(key: string): Promise<string | null> {
@@ -123,14 +119,14 @@ export async function deleteConfig(key: string): Promise<void> {
 }
 
 export async function getAllConfig(): Promise<Record<string, string>> {
-    const rows = await mainDb.execute("SELECT key, value FROM config");
+    const rows = await mainDb.execute({ sql: "SELECT key, value FROM config", args: [] });
     const out: Record<string, string> = {};
     for (const r of rows.rows) out[r.key as string] = r.value as string;
     return out;
 }
 
 // ============================================================
-// OWNER & USERS (using mainDb)
+// OWNER & USERS
 // ============================================================
 
 export async function seedOwner(): Promise<number | null> {
@@ -149,7 +145,10 @@ export async function seedOwner(): Promise<number | null> {
 }
 
 export async function getOwner(): Promise<number | null> {
-    const row = await mainDb.execute({ sql: "SELECT user_id FROM owner WHERE id = 1" });
+    const row = await mainDb.execute({ 
+        sql: "SELECT user_id FROM owner WHERE id = 1",
+        args: [] // 👈 FIX: Added empty args array
+    });
     return row.rows.length > 0 ? (row.rows[0].user_id as number) : null;
 }
 
@@ -179,7 +178,10 @@ export async function isAllowedUser(userId: number): Promise<boolean> {
 }
 
 export async function listAllowedUsers(): Promise<{ user_id: number; username: string | null; added_at: number }[]> {
-    const rows = await mainDb.execute("SELECT user_id, username, added_at FROM allowed_users ORDER BY added_at ASC");
+    const rows = await mainDb.execute({ 
+        sql: "SELECT user_id, username, added_at FROM allowed_users ORDER BY added_at ASC",
+        args: [] // 👈 FIX: Added empty args array
+    });
     return rows.rows.map((r) => ({
         user_id: r.user_id as number,
         username: r.username as string | null,
@@ -188,7 +190,7 @@ export async function listAllowedUsers(): Promise<{ user_id: number; username: s
 }
 
 // ============================================================
-// HISTORY (using mainDb)
+// HISTORY
 // ============================================================
 
 export interface Message {
@@ -254,7 +256,7 @@ function sanitizeHistory(messages: Message[]): Message[] {
 }
 
 // ============================================================
-// COMMANDS (using commandsDb)
+// COMMANDS
 // ============================================================
 
 export interface StoredCommand {
@@ -330,7 +332,10 @@ export async function toggleCommand(name: string): Promise<{ enabled: boolean; f
 }
 
 export async function listCommands(): Promise<StoredCommand[]> {
-    const rows = await commandsDb.execute("SELECT * FROM commands ORDER BY name ASC");
+    const rows = await commandsDb.execute({ 
+        sql: "SELECT * FROM commands ORDER BY name ASC",
+        args: [] // 👈 FIX: Added empty args array
+    });
     return rows.rows.map((r) => ({
         name: r.name as string,
         description: r.description as string,
