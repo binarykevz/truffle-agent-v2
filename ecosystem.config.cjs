@@ -5,7 +5,7 @@ module.exports = {
             script: "src/index.ts",
             interpreter: "bun",
             interpreterArgs: "run",
-            cwd: "/home/kevz/truffle-agent", // 👈 UPDATE THIS
+            cwd: "/home/kevz/truffle-agent-v2", // 👈 UPDATE THIS
             env: { NODE_ENV: "production" },
             autorestart: true,
             watch: false,
