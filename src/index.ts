@@ -261,7 +261,54 @@ async function main() {
         }
     });
 
+// ============================================================
+    // REPLY-TO-FILE HANDLER (user replies to an uploaded file)
     // ============================================================
+    bot.on("message:text", async (ctx) => {
+        const text = ctx.message.text;
+        const userId = ctx.from.id;
+        const repliedTo = ctx.message.reply_to_message;
+        
+        // Check if user is replying to a file message we have cached
+        if (repliedTo && (repliedTo.document || repliedTo.photo)) {
+            const repliedMsgId = repliedTo.message_id;
+            const cachedFile = findCachedFile(userId, repliedMsgId);
+            
+            if (cachedFile) {
+                // Check if the reply text suggests conversion
+                const lowerText = text.toLowerCase();
+                const isConversion = /convert|change|to |into |make|transform/i.test(lowerText);
+                
+                if (isConversion) {
+                    // Create a new job ID for this conversion request
+                    const jobId = crypto.randomUUID().slice(0, 8);
+                    const jobInfo = {
+                        jobId,
+                        filePath: cachedFile.filePath,
+                        fileName: cachedFile.fileName,
+                        ext: cachedFile.ext,
+                        userId,
+                    };
+                    conversionJobs.set(jobId, jobInfo);
+                    
+                    const userMessage = `[SYSTEM: User replied to their uploaded file with conversion request. Job ID: ${jobId}, File: ${cachedFile.fileName}, Format: ${cachedFile.ext}. User said: "${text}"]\n\nPlease handle this conversion request.`;
+                    
+                    try {
+                        const response = await runAgent(ctx, userMessage, jobInfo);
+                        const chunks = response.match(/.{1,4000}/gs) || [""];
+                        for (const chunk of chunks) await ctx.reply(chunk);
+                    } catch (error: any) {
+                        await ctx.reply(`❌ Error: ${error.message}`);
+                    }
+                    return;
+                }
+            }
+        }
+
+        // ============================================================
+        // NORMAL TEXT HANDLER (with AI code validation for features)
+        // ============================================================
+        //  ============================================================
     // TEXT MESSAGE HANDLER (with AI code validation)
     // ============================================================
     bot.on("message:text", async (ctx) => {
