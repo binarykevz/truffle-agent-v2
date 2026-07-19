@@ -11,6 +11,10 @@ export interface Tool {
     execute: (args: any, ctx: Context) => Promise<any>;
 }
 
+function escapeMd(text: string): string {
+    return text.replace(/[_*`\[\]()~>#+\-=|{}.!\\]/g, '\\$&');
+}
+
 const WORKSPACE = "/tmp/bot_workspace";
 
 export const tools: Tool[] = [
@@ -67,6 +71,32 @@ export const tools: Tool[] = [
                 const data = await response.json();
                 return typeof data === "string" ? data : JSON.stringify(data, null, 2).slice(0, 4000);
             } catch (err: any) { return `❌ OpenClaw request failed: ${err.message}`; }
+        }
+    },
+{
+        name: "request_file_upload",
+        description: "Use this when the user wants to convert a file but hasn't uploaded one yet. This sends a friendly request asking them to upload the file. The bot will automatically detect the format and show conversion options.",
+        parameters: {
+            type: "object",
+            properties: {
+                expected_format: { 
+                    type: "string", 
+                    description: "Optional: the file format the user mentioned (e.g., 'PDF', 'image', 'video'). Leave empty if unknown."
+                }
+            },
+            required: []
+        },
+        execute: async ({ expected_format = "" }, ctx) => {
+            const formatHint = expected_format 
+                ? ` (you mentioned **${escapeMd(expected_format)}**)` 
+                : "";
+            
+            await ctx.reply(
+                `📎 Please upload the file you want to convert${formatHint}.\n\n` +
+                `Once uploaded, I'll automatically detect its format and show you the available conversion options.`,
+                { parse_mode: "Markdown" }
+            );
+            return `File upload requested${formatHint}. Waiting for user to upload.`;
         }
     },
     {
