@@ -437,18 +437,42 @@ async function main() {
         const jobId = crypto.randomUUID().slice(0, 8);
         const fileName = `image_${jobId}.jpg`;
         const filePath = `/tmp/conv_${jobId}.${ext}`;
+        
         await ctx.replyWithChatAction("upload_photo");
         const fileLink = await ctx.getFileLink(photo.file_id);
         await Bun.write(filePath, await new Response(await fetch(fileLink)).arrayBuffer());
+        
         const jobInfo = { jobId, filePath, fileName, ext, userId: ctx.from.id };
         conversionJobs.set(jobId, jobInfo);
-        const userMessage = `Please process this attached image.\n\n[SYSTEM: User attached an image. Job ID: ${jobId}, Name: ${fileName}, Format: ${ext}]`;
+        
+        // Cache this file
+        cacheUserFile(ctx.from.id, {
+            messageId: ctx.message.message_id,
+            filePath,
+            fileName,
+            ext,
+            userId: ctx.from.id,
+            timestamp: Date.now(),
+        });
+        
+        const caption = ctx.message.caption || "";
+        const isConversionIntent = /convert|change|transform|make.*into|to (png|jpg|webp|pdf|gif)/i.test(caption.toLowerCase());
+        
+        let userMessage: string;
+        if (isConversionIntent) {
+            userMessage = `[SYSTEM: User attached an image with conversion intent. Job ID: ${jobId}, Format: ${ext}. User said: "${caption}"]\n\nPlease process for conversion.`;
+        } else if (caption) {
+            userMessage = `[SYSTEM: User attached an image. Job ID: ${jobId}, Format: ${ext}. Caption: "${caption}"]`;
+        } else {
+            userMessage = `[SYSTEM: User attached an image. Job ID: ${jobId}, Format: ${ext}]`;
+        }
+        
         try {
             const response = await runAgent(ctx, userMessage, jobInfo);
             const chunks = response.match(/.{1,4000}/gs) || [""];
             for (const chunk of chunks) await ctx.reply(chunk);
         } catch (error: any) {
-            await ctx.reply(`❌ Error: ${escapeMarkdown(error.message)}`);
+            await ctx.reply(`❌ Error: ${error.message}`);
         }
     });
 
