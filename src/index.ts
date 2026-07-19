@@ -53,6 +53,39 @@ async function safeEditMessageText(
     }
 }
 
+// Cache of uploaded files per user (for reply-to-file conversion)
+interface CachedFile {
+    messageId: number;
+    filePath: string;
+    fileName: string;
+    ext: string;
+    userId: number;
+    timestamp: number;
+}
+
+const userFileCache = new Map<number, CachedFile[]>();
+const MAX_CACHE_PER_USER = 10;
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function cacheUserFile(userId: number, file: CachedFile) {
+    let cache = userFileCache.get(userId) || [];
+    // Remove expired entries
+    const now = Date.now();
+    cache = cache.filter(f => now - f.timestamp < CACHE_TTL_MS);
+    // Add new file at the beginning
+    cache.unshift(file);
+    // Limit size
+    if (cache.length > MAX_CACHE_PER_USER) {
+        cache = cache.slice(0, MAX_CACHE_PER_USER);
+    }
+    userFileCache.set(userId, cache);
+}
+
+function findCachedFile(userId: number, messageId: number): CachedFile | null {
+    const cache = userFileCache.get(userId) || [];
+    return cache.find(f => f.messageId === messageId) || null;
+}
+
 // ============================================================
 // STATE
 // ============================================================
