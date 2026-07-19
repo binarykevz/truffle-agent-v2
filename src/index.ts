@@ -268,42 +268,56 @@ async function main() {
         const text = ctx.message.text;
         const userId = ctx.from.id;
         const repliedTo = ctx.message.reply_to_message;
-        
-        // Check if user is replying to a file message we have cached
+
+        // 1. Reply-to-file check
         if (repliedTo && (repliedTo.document || repliedTo.photo)) {
-            const repliedMsgId = repliedTo.message_id;
-            const cachedFile = findCachedFile(userId, repliedMsgId);
-            
-            if (cachedFile) {
-                // Check if the reply text suggests conversion
-                const lowerText = text.toLowerCase();
-                const isConversion = /convert|change|to |into |make|transform/i.test(lowerText);
-                
-                if (isConversion) {
-                    // Create a new job ID for this conversion request
-                    const jobId = crypto.randomUUID().slice(0, 8);
-                    const jobInfo = {
-                        jobId,
-                        filePath: cachedFile.filePath,
-                        fileName: cachedFile.fileName,
-                        ext: cachedFile.ext,
-                        userId,
-                    };
-                    conversionJobs.set(jobId, jobInfo);
-                    
-                    const userMessage = `[SYSTEM: User replied to their uploaded file with conversion request. Job ID: ${jobId}, File: ${cachedFile.fileName}, Format: ${cachedFile.ext}. User said: "${text}"]\n\nPlease handle this conversion request.`;
-                    
-                    try {
-                        const response = await runAgent(ctx, userMessage, jobInfo);
-                        const chunks = response.match(/.{1,4000}/gs) || [""];
-                        for (const chunk of chunks) await ctx.reply(chunk);
-                    } catch (error: any) {
-                        await ctx.reply(`❌ Error: ${error.message}`);
-                    }
-                    return;
+            const cachedFile = findCachedFile(userId, repliedTo.message_id);
+            if (cachedFile && /convert|change|to |into |make|transform/i.test(text.toLowerCase())) {
+                const jobId = crypto.randomUUID().slice(0, 8);
+                const jobInfo = {
+                    jobId,
+                    filePath: cachedFile.filePath,
+                    fileName: cachedFile.fileName,
+                    ext: cachedFile.ext,
+                    userId,
+                };
+                conversionJobs.set(jobId, jobInfo);
+
+                const userMessage = `[SYSTEM: User replied to their uploaded file with conversion request. Job ID: ${jobId}, File: ${cachedFile.fileName}, Format: ${cachedFile.ext}. User said: "${text}"]`;
+
+                try {
+                    const response = await runAgent(ctx, userMessage, jobInfo);
+                    const chunks = response.match(/.{1,4000}/gs) || [""];
+                    for (const chunk of chunks) await ctx.reply(chunk);
+                } catch (error: any) {
+                    await ctx.reply(`❌ Error: ${error.message}`);
                 }
+                return;   // ← IMPORTANT: exits after handling reply
             }
+        }   // ← closes the repliedTo if-block
+
+        // 2. Pending feature handler
+        const pending = pendingFeatures.get(userId);
+        if (pending) {
+            // ... existing pending code ...
+            return;
         }
+
+        // 3. Command handler
+        if (text.startsWith("/")) {
+            // ... existing command code ...
+            return;
+        }
+
+        // 4. Agent fallback
+        try {
+            const response = await runAgent(ctx, text);
+            const chunks = response.match(/.{1,4000}/gs) || [""];
+            for (const chunk of chunks) await ctx.reply(chunk);
+        } catch (error: any) {
+            await ctx.reply(`❌ Error: ${error.message}`);
+        }
+    });   // ← closes bot.on("message:text", ...)
 
         // ============================================================
         // NORMAL TEXT HANDLER (with AI code validation for features)
