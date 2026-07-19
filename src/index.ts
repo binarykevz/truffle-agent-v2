@@ -390,18 +390,44 @@ async function main() {
         const jobId = crypto.randomUUID().slice(0, 8);
         const fileName = doc.file_name || `file_${jobId}.${ext}`;
         const filePath = `/tmp/conv_${jobId}.${ext}`;
+        
         await ctx.replyWithChatAction("upload_document");
         const fileLink = await ctx.getFileLink(doc.file_id);
         await Bun.write(filePath, await new Response(await fetch(fileLink)).arrayBuffer());
+        
         const jobInfo = { jobId, filePath, fileName, ext, userId: ctx.from.id };
         conversionJobs.set(jobId, jobInfo);
-        const userMessage = `Please process this attached file.\n\n[SYSTEM: User attached a file. Job ID: ${jobId}, Name: ${fileName}, Format: ${ext}]`;
+        
+        // Cache this file for reply-to-file handling
+        cacheUserFile(ctx.from.id, {
+            messageId: ctx.message.message_id,
+            filePath,
+            fileName,
+            ext,
+            userId: ctx.from.id,
+            timestamp: Date.now(),
+        });
+        
+        // Check if user's caption or text suggests conversion intent
+        const caption = ctx.message.caption || "";
+        const userText = caption.toLowerCase();
+        const isConversionIntent = /convert|change|transform|make.*into|turn.*into|to (pdf|docx|png|jpg|mp3|mp4|gif|webp|zip|7z)/i.test(userText);
+        
+        let userMessage: string;
+        if (isConversionIntent) {
+            userMessage = `[SYSTEM: User attached a file with conversion intent. Job ID: ${jobId}, Name: ${fileName}, Format: ${ext}. User said: "${caption}"]\n\nPlease process this file for conversion.`;
+        } else if (caption) {
+            userMessage = `[SYSTEM: User attached a file. Job ID: ${jobId}, Name: ${fileName}, Format: ${ext}. User caption: "${caption}"]`;
+        } else {
+            userMessage = `[SYSTEM: User attached a file. Job ID: ${jobId}, Name: ${fileName}, Format: ${ext}]`;
+        }
+        
         try {
             const response = await runAgent(ctx, userMessage, jobInfo);
             const chunks = response.match(/.{1,4000}/gs) || [""];
             for (const chunk of chunks) await ctx.reply(chunk);
         } catch (error: any) {
-            await ctx.reply(`❌ Error: ${escapeMarkdown(error.message)}`);
+            await ctx.reply(`❌ Error: ${error.message}`);
         }
     });
 
