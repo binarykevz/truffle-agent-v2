@@ -1,4 +1,5 @@
 import { createClient, type Client } from "@libsql/client";
+import { configCache, commandCache } from "./cache";
 
 // ============================================================
 // TURSO DATABASES
@@ -19,7 +20,7 @@ export const commandsDb: Client = createClient({
 });
 
 const memoryUrl = process.env.TURSO_MEMORY_URL;
-export const memoryDb: Client = memoryUrl 
+export const memoryDb: Client = memoryUrl
     ? createClient({ url: memoryUrl, authToken: process.env.TURSO_MEMORY_TOKEN || undefined })
     : mainDb;
 
@@ -98,12 +99,17 @@ export async function initMemoryDB() {
 }
 
 // ============================================================
-// CONFIG
+// CONFIG (with cache)
 // ============================================================
 
 export async function getConfig(key: string): Promise<string | null> {
+    const cached = configCache.get(key);
+    if (cached !== undefined) return cached;
+
     const row = await mainDb.execute({ sql: "SELECT value FROM config WHERE key = ?", args: [key] });
-    return (row.rows[0]?.value as string) ?? null;
+    const value = (row.rows[0]?.value as string) ?? null;
+    if (value !== null) configCache.set(key, value);
+    return value;
 }
 
 export async function setConfig(key: string, value: string): Promise<void> {
@@ -112,10 +118,12 @@ export async function setConfig(key: string, value: string): Promise<void> {
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
         args: [key, value, Date.now()],
     });
+    configCache.set(key, value);
 }
 
 export async function deleteConfig(key: string): Promise<void> {
     await mainDb.execute({ sql: "DELETE FROM config WHERE key = ?", args: [key] });
+    configCache.delete(key);
 }
 
 export async function getAllConfig(): Promise<Record<string, string>> {
@@ -134,7 +142,7 @@ export async function seedOwner(): Promise<number | null> {
     if (!envOwner) return null;
     const ownerId = Number(envOwner);
     if (isNaN(ownerId)) return null;
-    
+
     await mainDb.execute({
         sql: `INSERT INTO owner (id, user_id, updated_at) VALUES (1, ?, ?)
               ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at`,
@@ -145,9 +153,9 @@ export async function seedOwner(): Promise<number | null> {
 }
 
 export async function getOwner(): Promise<number | null> {
-    const row = await mainDb.execute({ 
+    const row = await mainDb.execute({
         sql: "SELECT user_id FROM owner WHERE id = 1",
-        args: [] // 👈 FIX: Added empty args array
+        args: [],
     });
     return row.rows.length > 0 ? (row.rows[0].user_id as number) : null;
 }
@@ -178,9 +186,9 @@ export async function isAllowedUser(userId: number): Promise<boolean> {
 }
 
 export async function listAllowedUsers(): Promise<{ user_id: number; username: string | null; added_at: number }[]> {
-    const rows = await mainDb.execute({ 
+    const rows = await mainDb.execute({
         sql: "SELECT user_id, username, added_at FROM allowed_users ORDER BY added_at ASC",
-        args: [] // 👈 FIX: Added empty args array
+        args: [],
     });
     return rows.rows.map((r) => ({
         user_id: r.user_id as number,
@@ -256,7 +264,7 @@ function sanitizeHistory(messages: Message[]): Message[] {
 }
 
 // ============================================================
-// COMMANDS
+// COMMANDS (with cache)
 // ============================================================
 
 export interface StoredCommand {
@@ -271,13 +279,20 @@ export interface StoredCommand {
 }
 
 export async function getCommand(name: string): Promise<StoredCommand | null> {
+    const normalizedName = name.replace(/^\//, "");
+    const cached = commandCache.get(normalizedName);
+    if (cached !== undefined) return cached;
+
     const row = await commandsDb.execute({
         sql: "SELECT * FROM commands WHERE name = ?",
-        args: [name.replace(/^\//, "")],
+        args: [normalizedName],
     });
-    if (row.rows.length === 0) return null;
+    if (row.rows.length === 0) {
+        commandCache.set(normalizedName, null);
+        return null;
+    }
     const r = row.rows[0];
-    return {
+    const cmd: StoredCommand = {
         name: r.name as string,
         description: r.description as string,
         code: r.code as string,
@@ -287,12 +302,15 @@ export async function getCommand(name: string): Promise<StoredCommand | null> {
         created_at: r.created_at as number,
         updated_at: r.updated_at as number,
     };
+    commandCache.set(normalizedName, cmd);
+    return cmd;
 }
 
 export async function saveCommand(
     name: string, code: string, description: string,
     ownerOnly: boolean, createdBy: number
 ): Promise<void> {
+    const normalizedName = name.replace(/^\//, "");
     const now = Date.now();
     await commandsDb.execute({
         sql: `INSERT INTO commands (name, description, code, owner_only, enabled, created_by, created_at, updated_at)
@@ -300,41 +318,48 @@ export async function saveCommand(
               ON CONFLICT(name) DO UPDATE SET
                 code = excluded.code, description = excluded.description,
                 owner_only = excluded.owner_only, updated_at = excluded.updated_at`,
-        args: [name.replace(/^\//, ""), description, code, ownerOnly ? 1 : 0, createdBy, now, now],
+        args: [normalizedName, description, code, ownerOnly ? 1 : 0, createdBy, now, now],
     });
+    commandCache.delete(normalizedName);
 }
 
 export async function updateCommandDescription(name: string, description: string): Promise<boolean> {
+    const normalizedName = name.replace(/^\//, "");
     const res = await commandsDb.execute({
         sql: `UPDATE commands SET description = ?, updated_at = ? WHERE name = ?`,
-        args: [description, Date.now(), name.replace(/^\//, "")],
+        args: [description, Date.now(), normalizedName],
     });
+    if ((res.rowsAffected ?? 0) > 0) commandCache.delete(normalizedName);
     return (res.rowsAffected ?? 0) > 0;
 }
 
 export async function deleteCommand(name: string): Promise<boolean> {
+    const normalizedName = name.replace(/^\//, "");
     const res = await commandsDb.execute({
         sql: "DELETE FROM commands WHERE name = ?",
-        args: [name.replace(/^\//, "")],
+        args: [normalizedName],
     });
+    commandCache.delete(normalizedName);
     return (res.rowsAffected ?? 0) > 0;
 }
 
 export async function toggleCommand(name: string): Promise<{ enabled: boolean; found: boolean }> {
-    const cmd = await getCommand(name);
+    const normalizedName = name.replace(/^\//, "");
+    const cmd = await getCommand(normalizedName);
     if (!cmd) return { enabled: false, found: false };
     const newEnabled = cmd.enabled === 1 ? 0 : 1;
     await commandsDb.execute({
         sql: `UPDATE commands SET enabled = ?, updated_at = ? WHERE name = ?`,
-        args: [newEnabled, Date.now(), name.replace(/^\//, "")],
+        args: [newEnabled, Date.now(), normalizedName],
     });
+    commandCache.delete(normalizedName);
     return { enabled: newEnabled === 1, found: true };
 }
 
 export async function listCommands(): Promise<StoredCommand[]> {
-    const rows = await commandsDb.execute({ 
+    const rows = await commandsDb.execute({
         sql: "SELECT * FROM commands ORDER BY name ASC",
-        args: [] // 👈 FIX: Added empty args array
+        args: [],
     });
     return rows.rows.map((r) => ({
         name: r.name as string,
