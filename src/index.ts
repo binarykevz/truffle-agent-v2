@@ -237,7 +237,7 @@ async function main() {
     // ============================================================
     // FILE HANDLERS
     // ============================================================
-    bot.on("message:document", async (ctx) => {
+        bot.on("message:document", async (ctx) => {
         const doc = ctx.message.document;
         const ext = doc.file_name?.split('.').pop()?.toLowerCase() || "bin";
         const jobId = crypto.randomUUID().slice(0, 8);
@@ -245,7 +245,11 @@ async function main() {
         const filePath = `/tmp/conv_${jobId}.${ext}`;
 
         await ctx.replyWithChatAction("upload_document");
-        const fileLink = await ctx.api.getFileLink(doc.file_id);
+        
+        // ✅ CORRECT: Use getFile() then construct URL
+        const file = await ctx.api.getFile(doc.file_id);
+        const fileLink = `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
+        
         await Bun.write(filePath, await new Response(await fetch(fileLink)).arrayBuffer());
 
         const jobInfo = { jobId, filePath, fileName, ext, userId: ctx.from.id };
@@ -279,7 +283,7 @@ async function main() {
         }
     });
 
-    bot.on("message:photo", async (ctx) => {
+        bot.on("message:photo", async (ctx) => {
         const photo = ctx.message.photo[ctx.message.photo.length - 1];
         const ext = "jpg";
         const jobId = crypto.randomUUID().slice(0, 8);
@@ -287,7 +291,11 @@ async function main() {
         const filePath = `/tmp/conv_${jobId}.${ext}`;
 
         await ctx.replyWithChatAction("upload_photo");
-        const fileLink = await ctx.api.getFileLink(photo.file_id);
+        
+        // ✅ CORRECT: Use getFile() then construct URL
+        const file = await ctx.api.getFile(photo.file_id);
+        const fileLink = `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
+        
         await Bun.write(filePath, await new Response(await fetch(fileLink)).arrayBuffer());
 
         const jobInfo = { jobId, filePath, fileName, ext, userId: ctx.from.id };
