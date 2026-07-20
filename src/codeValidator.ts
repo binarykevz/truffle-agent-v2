@@ -59,9 +59,6 @@ function tryParseAsFunction(code: string): { success: boolean; error?: string } 
     try {
         const wrapped = `(async function test() {
             const ctx = null, db = null, auth = null, utils = null;
-            const { getConfig, setConfig, deleteConfig, getAllConfig, addAllowedUser, removeAllowedUser, listAllowedUsers, getCommand, saveCommand, deleteCommand, listCommands } = db || {};
-            const { isOwner, isAllowedUser, getOwner } = auth || {};
-            const { fetch, Bun } = utils || {};
             ${code}
         })`;
         new Function(wrapped);
@@ -78,21 +75,12 @@ async function askLLMToFixCode(code: string, error: string, commandName: string)
         const model = (await getConfig("model")) || "qwen-max";
         if (!apiKey || !baseUrl) return null;
 
-        const systemPrompt = `You are a code validator for a Telegram bot command system.
-The code will be executed as the body of an async function with these variables in scope:
-- ctx: Grammy Context (ctx.reply, ctx.from, ctx.match, ctx.message, ctx.replyWithDocument, etc.)
-- db: { getConfig, setConfig, deleteConfig, getAllConfig, addAllowedUser, removeAllowedUser, listAllowedUsers, getCommand, saveCommand, deleteCommand, listCommands }
-- auth: { isOwner, isAllowedUser, getOwner }
-- utils: { fetch, Bun }
-
+        const systemPrompt = `You are a code validator for a Telegram bot command.
+Code runs as async function body with: ctx, db, auth, utils in scope.
 Command name: /${commandName}
 
-Rules:
-- Return ONLY the fixed code, no explanation, no markdown fences.
-- Keep the same functionality, just fix syntax/logic errors.
-- Use await ctx.reply(...) to send messages.
-- Code must be valid TypeScript/JavaScript.
-- Do not add imports - all APIs are already in scope.`;
+CRITICAL: Return ONLY the fixed code. NO explanations, NO changelog, NO markdown fences.
+Just raw TypeScript/JavaScript code.`;
 
         const res = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
             method: "POST",
@@ -101,7 +89,7 @@ Rules:
                 model,
                 messages: [
                     { role: "system", content: systemPrompt },
-                    { role: "user", content: `Fix this code:\n\n\`\`\`\n${code}\n\`\`\`\n\nError:\n${error}` },
+                    { role: "user", content: `Fix this code:\n\n${code}\n\nError:\n${error}` },
                 ],
                 temperature: 0.1,
             }),
@@ -111,7 +99,13 @@ Rules:
         const data = (await res.json()) as any;
         let fixed = data.choices?.[0]?.message?.content?.trim();
         if (!fixed) return null;
-        fixed = fixed.replace(/^```(?:typescript|js|javascript)?\n?/i, "").replace(/\n?```$/i, "").trim();
+
+        fixed = fixed.replace(/^```(?:typescript|ts|js|javascript)?\n?/i, "").replace(/\n?```$/i, "").trim();
+        fixed = fixed.replace(/\*\*Changes made:\*\*[\s\S]*$/i, "").trim();
+        fixed = fixed.replace(/## Changes[\s\S]*$/i, "").trim();
+        fixed = fixed.replace(/Changelog:[\s\S]*$/i, "").trim();
+        fixed = fixed.replace(/Explanation:[\s\S]*$/i, "").trim();
+
         return fixed;
     } catch (e) {
         console.error("LLM fix request failed:", e);
