@@ -32,7 +32,9 @@ export async function initMainDB() {
     await mainDb.batch([
         `CREATE TABLE IF NOT EXISTS allowed_users (
             user_id INTEGER PRIMARY KEY,
+            type TEXT NOT NULL DEFAULT 'user',
             username TEXT,
+            title TEXT,
             added_by INTEGER,
             added_at INTEGER NOT NULL
         )`,
@@ -58,6 +60,20 @@ export async function initMainDB() {
         )`,
         `CREATE INDEX IF NOT EXISTS idx_history_user ON history(user_id, timestamp)`,
     ], "write");
+
+    // Migration: add 'type' and 'title' columns if they don't exist (for existing DBs)
+    try {
+        await mainDb.execute({ sql: "ALTER TABLE allowed_users ADD COLUMN type TEXT NOT NULL DEFAULT 'user'", args: [] });
+    } catch {}
+    try {
+        await mainDb.execute({ sql: "ALTER TABLE allowed_users ADD COLUMN title TEXT", args: [] });
+    } catch {}
+    
+    // Backfill: set type='user' for existing rows without type
+    await mainDb.execute({ 
+        sql: "UPDATE allowed_users SET type = 'user' WHERE type IS NULL OR type = ''", 
+        args: [] 
+    });
 }
 
 export async function initCommandsDB() {
@@ -134,68 +150,140 @@ export async function getAllConfig(): Promise<Record<string, string>> {
 }
 
 // ============================================================
-// OWNER & USERS
+// ALLOWED USERS & GROUPS
 // ============================================================
 
-export async function seedOwner(): Promise<number | null> {
-    const envOwner = process.env.OWNER_ID;
-    if (!envOwner) return null;
-    const ownerId = Number(envOwner);
-    if (isNaN(ownerId)) return null;
-
-    await mainDb.execute({
-        sql: `INSERT INTO owner (id, user_id, updated_at) VALUES (1, ?, ?)
-              ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at`,
-        args: [ownerId, Date.now()],
-    });
-    await addAllowedUser(ownerId, undefined, ownerId);
-    return ownerId;
-}
-
-export async function getOwner(): Promise<number | null> {
-    const row = await mainDb.execute({
-        sql: "SELECT user_id FROM owner WHERE id = 1",
-        args: [],
-    });
-    return row.rows.length > 0 ? (row.rows[0].user_id as number) : null;
-}
-
-export async function isOwner(userId: number): Promise<boolean> {
-    return (await getOwner()) === userId;
-}
-
-export async function addAllowedUser(userId: number, username: string | undefined, addedBy: number): Promise<boolean> {
+export async function addAllowedUser(
+    userId: number, 
+    username: string | undefined, 
+    addedBy: number
+): Promise<boolean> {
     try {
         await mainDb.execute({
-            sql: `INSERT INTO allowed_users (user_id, username, added_by, added_at) VALUES (?, ?, ?, ?)`,
+            sql: `INSERT INTO allowed_users (user_id, type, username, title, added_by, added_at) 
+                  VALUES (?, 'user', ?, NULL, ?, ?)
+                  ON CONFLICT(user_id) DO UPDATE SET 
+                    type = 'user',
+                    username = COALESCE(excluded.username, allowed_users.username),
+                    added_by = excluded.added_by`,
             args: [userId, username ?? null, addedBy, Date.now()],
         });
         return true;
-    } catch { return false; }
+    } catch (e) { 
+        console.error("addAllowedUser error:", e);
+        return false; 
+    }
+}
+
+export async function addAllowedGroup(
+    groupId: number,
+    title: string | undefined,
+    username: string | undefined,
+    addedBy: number
+): Promise<boolean> {
+    try {
+        await mainDb.execute({
+            sql: `INSERT INTO allowed_users (user_id, type, username, title, added_by, added_at) 
+                  VALUES (?, 'group', ?, ?, ?, ?)
+                  ON CONFLICT(user_id) DO UPDATE SET 
+                    type = 'group',
+                    title = COALESCE(excluded.title, allowed_users.title),
+                    username = COALESCE(excluded.username, allowed_users.username),
+                    added_by = excluded.added_by`,
+            args: [groupId, username ?? null, title ?? null, addedBy, Date.now()],
+        });
+        return true;
+    } catch (e) { 
+        console.error("addAllowedGroup error:", e);
+        return false; 
+    }
 }
 
 export async function removeAllowedUser(userId: number): Promise<boolean> {
-    const res = await mainDb.execute({ sql: "DELETE FROM allowed_users WHERE user_id = ?", args: [userId] });
+    const res = await mainDb.execute({ 
+        sql: "DELETE FROM allowed_users WHERE user_id = ?", 
+        args: [userId] 
+    });
     return (res.rowsAffected ?? 0) > 0;
 }
 
-export async function isAllowedUser(userId: number): Promise<boolean> {
+/**
+ * Check if a user is allowed.
+ * - Owner is always allowed
+ * - User is allowed if their ID is in allowed_users as type='user'
+ * - User is allowed if the current chat (group) is in allowed_users as type='group'
+ */
+export async function isAllowedUser(userId: number, chatId?: number): Promise<boolean> {
+    // Owner is always allowed
     if (await isOwner(userId)) return true;
-    const row = await mainDb.execute({ sql: "SELECT 1 FROM allowed_users WHERE user_id = ?", args: [userId] });
-    return row.rows.length > 0;
+    
+    // Check if user is individually allowed
+    const userRow = await mainDb.execute({ 
+        sql: "SELECT 1 FROM allowed_users WHERE user_id = ? AND type = 'user'", 
+        args: [userId] 
+    });
+    if (userRow.rows.length > 0) return true;
+    
+    // Check if the current chat (group) is allowed
+    if (chatId && chatId < 0) {
+        const groupRow = await mainDb.execute({ 
+            sql: "SELECT 1 FROM allowed_users WHERE user_id = ? AND type = 'group'", 
+            args: [chatId] 
+        });
+        if (groupRow.rows.length > 0) return true;
+    }
+    
+    return false;
 }
 
-export async function listAllowedUsers(): Promise<{ user_id: number; username: string | null; added_at: number }[]> {
-    const rows = await mainDb.execute({
-        sql: "SELECT user_id, username, added_at FROM allowed_users ORDER BY added_at ASC",
-        args: [],
+export async function listAllowedUsers(): Promise<{
+    users: { user_id: number; username: string | null; added_at: number }[];
+    groups: { chat_id: number; title: string | null; username: string | null; added_at: number }[];
+}> {
+    const rows = await mainDb.execute({ 
+        sql: "SELECT user_id, type, username, title, added_at FROM allowed_users ORDER BY added_at ASC", 
+        args: [] 
     });
-    return rows.rows.map((r) => ({
-        user_id: r.user_id as number,
-        username: r.username as string | null,
-        added_at: r.added_at as number,
-    }));
+    
+    const users: any[] = [];
+    const groups: any[] = [];
+    
+    for (const r of rows.rows) {
+        const type = r.type as string;
+        if (type === 'group') {
+            groups.push({
+                chat_id: r.user_id as number,
+                title: r.title as string | null,
+                username: r.username as string | null,
+                added_at: r.added_at as number,
+            });
+        } else {
+            users.push({
+                user_id: r.user_id as number,
+                username: r.username as string | null,
+                added_at: r.added_at as number,
+            });
+        }
+    }
+    
+    return { users, groups };
 }
+
+export async function getEntry(userId: number): Promise<{ type: string; username: string | null; title: string | null } | null> {
+    const row = await mainDb.execute({ 
+        sql: "SELECT type, username, title FROM allowed_users WHERE user_id = ?", 
+        args: [userId] 
+    });
+    if (row.rows.length === 0) return null;
+    const r = row.rows[0];
+    return {
+        type: r.type as string,
+        username: r.username as string | null,
+        title: r.title as string | null,
+    };
+}
+
+
 
 // ============================================================
 // HISTORY
