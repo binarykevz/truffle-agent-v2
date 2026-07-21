@@ -237,7 +237,182 @@ async function main() {
         clearAllCaches();
         await ctx.reply("🧹 All caches cleared.");
     });
+    bot.command("adduser", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        
+        let targetId: number | null = null;
+        let targetUsername: string | undefined = undefined;
+        let targetFirstName: string | undefined = undefined;
+        
+        // Case 1: Replying to a message — get user from the replied message
+        const repliedTo = ctx.message?.reply_to_message;
+        if (repliedTo?.from) {
+            targetId = repliedTo.from.id;
+            targetUsername = repliedTo.from.username;
+            targetFirstName = repliedTo.from.first_name;
+        }
+        // Case 2: Argument provided
+        else if (ctx.match?.trim()) {
+            const parsed = Number(ctx.match.trim());
+            if (!isNaN(parsed) && parsed > 0) {
+                targetId = parsed;
+            }
+        }
+        
+        if (!targetId) {
+            return ctx.reply(
+                "Usage:\n" +
+                "• Reply to a user's message with `/adduser`\n" +
+                "• Or: `/adduser <user_id>`",
+                { parse_mode: "Markdown" }
+            );
+        }
+        
+        // Prevent adding owner
+        const ownerId = await getOwner();
+        if (targetId === ownerId) {
+            return ctx.reply("ℹ️ This user is already the owner.");
+        }
+        
+        const added = await addAllowedUser(targetId, targetUsername, ctx.from.id);
+        const displayName = targetUsername ? `@${targetUsername}` : (targetFirstName || `ID ${targetId}`);
+        
+        if (added) {
+            await ctx.reply(`✅ Added user **${displayName}** (\`${targetId}\`)`, { parse_mode: "Markdown" });
+        } else {
+            await ctx.reply(`ℹ️ User \`${targetId}\` was already allowed.`);
+        }
+    });
+    bot.command("addgroup", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        
+        const chat = ctx.chat;
+        if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
+            return ctx.reply("⚠️ This command must be used inside a group chat.");
+        }
+        
+        const groupId = chat.id;
+        const groupTitle = chat.title;
+        const groupUsername = 'username' in chat ? (chat.username as string | undefined) : undefined;
+        
+        const added = await addAllowedGroup(groupId, groupTitle, groupUsername, ctx.from.id);
+        
+        const displayTitle = groupUsername ? `@${groupUsername}` : (groupTitle || `ID ${groupId}`);
+        
+        if (added) {
+            await ctx.reply(
+                `✅ Added group **${displayTitle}**\n` +
+                `🆔 Chat ID: \`${groupId}\`\n` +
+                `👥 All members of this group can now use the bot!`,
+                { parse_mode: "Markdown" }
+            );
+        } else {
+            await ctx.reply(`ℹ️ Group \`${groupId}\` was already allowed.`);
+        }
+    });
 
+    bot.command("removeuser", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        
+        let targetId: number | null = null;
+        let targetDisplayName = "";
+        
+        const repliedTo = ctx.message?.reply_to_message;
+        if (repliedTo?.from) {
+            targetId = repliedTo.from.id;
+            targetDisplayName = repliedTo.from.username ? `@${repliedTo.from.username}` : repliedTo.from.first_name;
+        } else if (ctx.match?.trim()) {
+            const parsed = Number(ctx.match.trim());
+            if (!isNaN(parsed)) {
+                targetId = parsed;
+                const entry = await getEntry(parsed);
+                targetDisplayName = entry?.username ? `@${entry.username}` : (entry?.title || `ID ${parsed}`);
+            }
+        }
+        
+        if (!targetId) {
+            return ctx.reply(
+                "Usage:\n" +
+                "• Reply to a message with `/removeuser`\n" +
+                "• Or: `/removeuser <user_id>`\n" +
+                "• For groups: `/removegroup`",
+                { parse_mode: "Markdown" }
+            );
+        }
+        
+        if (targetId === ctx.from.id) return ctx.reply("⛔ You cannot remove yourself.");
+        
+        const ownerId = await getOwner();
+        if (targetId === ownerId) return ctx.reply("⛔ You cannot remove the owner.");
+        
+        const removed = await removeAllowedUser(targetId);
+        await ctx.reply(removed 
+            ? `✅ Removed ${targetDisplayName || targetId}` 
+            : `ℹ️ \`${targetId}\` was not in the allowed list.`,
+            { parse_mode: "Markdown" }
+        );
+    });
+
+    bot.command("removegroup", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        
+        let targetId: number;
+        let targetTitle = "";
+        
+        if (ctx.match?.trim()) {
+            const parsed = Number(ctx.match.trim());
+            if (isNaN(parsed)) return ctx.reply("Usage: `/removegroup <chat_id>`", { parse_mode: "Markdown" });
+            targetId = parsed;
+        } else if (ctx.chat && (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup')) {
+            targetId = ctx.chat.id;
+            targetTitle = ctx.chat.title || '';
+        } else {
+            return ctx.reply("Usage: `/removegroup <chat_id>` or use in a group", { parse_mode: "Markdown" });
+        }
+        
+        const entry = await getEntry(targetId);
+        if (!entry || entry.type !== 'group') {
+            return ctx.reply(`ℹ️ \`${targetId}\` is not an approved group.`);
+        }
+        
+        const removed = await removeAllowedUser(targetId);
+        await ctx.reply(removed 
+            ? `✅ Removed group **${entry.title || targetTitle || targetId}**` 
+            : `ℹ️ Not found.`,
+            { parse_mode: "Markdown" }
+        );
+    });
+
+        bot.command("listusers", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        
+        const { users, groups } = await listAllowedUsers();
+        
+        if (users.length === 0 && groups.length === 0) {
+            return ctx.reply("No allowed users or groups yet.");
+        }
+        
+        let msg = "";
+        
+        if (groups.length > 0) {
+            msg += `**👥 Approved Groups (${groups.length}):**\n`;
+            for (const g of groups) {
+                const name = g.username ? `@${g.username}` : (g.title || 'Unknown');
+                msg += `• \`${g.chat_id}\` — ${name}\n`;
+            }
+            msg += `\n`;
+        }
+        
+        if (users.length > 0) {
+            msg += `**👤 Approved Users (${users.length}):**\n`;
+            for (const u of users) {
+                const name = u.username ? `@${u.username}` : 'no username';
+                msg += `• \`${u.user_id}\` — ${name}\n`;
+            }
+        }
+        
+        await safeReply(ctx, msg);
+    });
     // ============================================================
     // FILE HANDLERS
     // ============================================================
