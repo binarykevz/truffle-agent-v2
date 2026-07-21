@@ -23,35 +23,117 @@ await clearHistory(ctx.from.id);
 await ctx.reply("🧹 Memory cleared.");
 `,
         },
-        {
-            name: "adduser", description: "Allow a user (owner only)", ownerOnly: true,
+               {
+            name: "adduser", description: "Add a user (owner only)", ownerOnly: true,
             code: `
 if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
-const targetId = Number(ctx.match?.trim());
-if (!targetId || isNaN(targetId)) return ctx.reply("Usage: \`/adduser <user_id>\`", { parse_mode: "Markdown" });
-const added = await addAllowedUser(targetId, undefined, ctx.from.id);
-await ctx.reply(added ? \`✅ Added user \\\`\${targetId}\\\`\` : \`ℹ️ Already allowed\`, { parse_mode: "Markdown" });
+let targetId = null, targetUsername = undefined, targetFirstName = undefined;
+const repliedTo = ctx.message?.reply_to_message;
+if (repliedTo?.from) {
+    targetId = repliedTo.from.id;
+    targetUsername = repliedTo.from.username;
+    targetFirstName = repliedTo.from.first_name;
+} else if (ctx.match?.trim()) {
+    const parsed = Number(ctx.match.trim());
+    if (!isNaN(parsed) && parsed > 0) targetId = parsed;
+}
+if (!targetId) return ctx.reply("Usage: Reply with /adduser or /adduser <id>", { parse_mode: "Markdown" });
+const ownerId = await getOwner();
+if (targetId === ownerId) return ctx.reply("ℹ️ Already the owner.");
+const added = await addAllowedUser(targetId, targetUsername, ctx.from.id);
+const displayName = targetUsername ? \`@\\\${targetUsername}\` : (targetFirstName || \`ID \\\${targetId}\`);
+await ctx.reply(added ? \`✅ Added user \\\${displayName} (\\\`\${targetId}\\\`)\` : \`ℹ️ Already allowed\`, { parse_mode: "Markdown" });
 `,
         },
         {
-            name: "removeuser", description: "Revoke a user (owner only)", ownerOnly: true,
+            name: "addgroup", description: "Approve a group (owner only)", ownerOnly: true,
             code: `
 if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
-const targetId = Number(ctx.match?.trim());
-if (!targetId || isNaN(targetId)) return ctx.reply("Usage: \`/removeuser <user_id>\`", { parse_mode: "Markdown" });
+const chat = ctx.chat;
+if (!chat || (chat.type !== 'group' && chat.type !== 'supergroup')) {
+    return ctx.reply("⚠️ Use this command inside a group chat.");
+}
+const groupId = chat.id;
+const groupTitle = chat.title;
+const groupUsername = chat.username || undefined;
+const added = await addAllowedGroup(groupId, groupTitle, groupUsername, ctx.from.id);
+const displayTitle = groupUsername ? \`@\\\${groupUsername}\` : (groupTitle || \`ID \\\${groupId}\`);
+await ctx.reply(
+    added 
+        ? \`✅ Added group \\\${displayTitle}\\\\n🆔 Chat ID: \\\`\\\${groupId}\\\`\\\\n👥 All members can now use the bot!\`
+        : \`ℹ️ Group already allowed.\`,
+    { parse_mode: "Markdown" }
+);
+`,
+        },
+        {
+            name: "removeuser", description: "Remove a user (owner only)", ownerOnly: true,
+            code: `
+if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+let targetId = null, displayName = "";
+const repliedTo = ctx.message?.reply_to_message;
+if (repliedTo?.from) {
+    targetId = repliedTo.from.id;
+    displayName = repliedTo.from.username ? \`@\\\${repliedTo.from.username}\` : repliedTo.from.first_name;
+} else if (ctx.match?.trim()) {
+    const parsed = Number(ctx.match.trim());
+    if (!isNaN(parsed)) {
+        targetId = parsed;
+        const entry = await getEntry(parsed);
+        displayName = entry?.username ? \`@\\\${entry.username}\` : (entry?.title || \`ID \\\${parsed}\`);
+    }
+}
+if (!targetId) return ctx.reply("Usage: Reply with /removeuser or /removeuser <id>", { parse_mode: "Markdown" });
 if (targetId === ctx.from.id) return ctx.reply("⛔ Cannot remove yourself.");
+const ownerId = await getOwner();
+if (targetId === ownerId) return ctx.reply("⛔ Cannot remove the owner.");
 const removed = await removeAllowedUser(targetId);
-await ctx.reply(removed ? \`✅ Removed user \\\`\${targetId}\\\`\` : \`ℹ️ Not in list\`, { parse_mode: "Markdown" });
+await ctx.reply(removed ? \`✅ Removed \\\${displayName || targetId}\` : \`ℹ️ Not in list\`, { parse_mode: "Markdown" });
 `,
         },
         {
-            name: "listusers", description: "Show allowed users (owner only)", ownerOnly: true,
+            name: "removegroup", description: "Remove a group (owner only)", ownerOnly: true,
             code: `
 if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
-const users = await listAllowedUsers();
-if (users.length === 0) return ctx.reply("No allowed users yet.");
-const lines = users.map(u => \`• \\\`\${u.user_id}\\\` \${u.username ? \`(@\${u.username})\` : ""}\`);
-await ctx.reply(\`**Allowed users (\${users.length}):**\\n\` + lines.join("\\n"), { parse_mode: "Markdown" });
+let targetId;
+if (ctx.match?.trim()) {
+    const parsed = Number(ctx.match.trim());
+    if (isNaN(parsed)) return ctx.reply("Usage: /removegroup <chat_id>", { parse_mode: "Markdown" });
+    targetId = parsed;
+} else if (ctx.chat && (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup')) {
+    targetId = ctx.chat.id;
+} else {
+    return ctx.reply("Usage: /removegroup <chat_id> or use in a group", { parse_mode: "Markdown" });
+}
+const entry = await getEntry(targetId);
+if (!entry || entry.type !== 'group') return ctx.reply(\`ℹ️ \\\`\${targetId}\\\` is not an approved group.\`);
+const removed = await removeAllowedUser(targetId);
+await ctx.reply(removed ? \`✅ Removed group \\\${entry.title || targetId}\` : \`ℹ️ Not found.\`, { parse_mode: "Markdown" });
+`,
+        },
+        {
+            name: "listusers", description: "List allowed users and groups (owner only)", ownerOnly: true,
+            code: `
+if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+const { users, groups } = await listAllowedUsers();
+if (users.length === 0 && groups.length === 0) return ctx.reply("No allowed users or groups yet.");
+let msg = "";
+if (groups.length > 0) {
+    msg += \`**👥 Approved Groups (\\\${groups.length}):**\\\\n\`;
+    for (const g of groups) {
+        const name = g.username ? \`@\\\${g.username}\` : (g.title || 'Unknown');
+        msg += \`• \\\`\\\${g.chat_id}\\\` — \\\${name}\\\\n\`;
+    }
+    msg += \`\\\\n\`;
+}
+if (users.length > 0) {
+    msg += \`**👤 Approved Users (\\\${users.length}):**\\\\n\`;
+    for (const u of users) {
+        const name = u.username ? \`@\\\${u.username}\` : 'no username';
+        msg += \`• \\\`\\\${u.user_id}\\\` — \\\${name}\\\\n\`;
+    }
+}
+await ctx.reply(msg, { parse_mode: "Markdown" });
 `,
         },
         {
