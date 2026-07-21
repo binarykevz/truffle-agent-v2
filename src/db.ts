@@ -61,7 +61,7 @@ export async function initMainDB() {
         `CREATE INDEX IF NOT EXISTS idx_history_user ON history(user_id, timestamp)`,
     ], "write");
 
-    // Migration: add 'type' and 'title' columns if they don't exist (for existing DBs)
+    // Migration: add columns if they don't exist
     try {
         await mainDb.execute({ sql: "ALTER TABLE allowed_users ADD COLUMN type TEXT NOT NULL DEFAULT 'user'", args: [] });
     } catch {}
@@ -69,7 +69,6 @@ export async function initMainDB() {
         await mainDb.execute({ sql: "ALTER TABLE allowed_users ADD COLUMN title TEXT", args: [] });
     } catch {}
     
-    // Backfill: set type='user' for existing rows without type
     await mainDb.execute({ 
         sql: "UPDATE allowed_users SET type = 'user' WHERE type IS NULL OR type = ''", 
         args: [] 
@@ -150,6 +149,37 @@ export async function getAllConfig(): Promise<Record<string, string>> {
 }
 
 // ============================================================
+// OWNER
+// ============================================================
+
+export async function seedOwner(): Promise<number | null> {
+    const envOwner = process.env.OWNER_ID;
+    if (!envOwner) return null;
+    const ownerId = Number(envOwner);
+    if (isNaN(ownerId)) return null;
+
+    await mainDb.execute({
+        sql: `INSERT INTO owner (id, user_id, updated_at) VALUES (1, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET user_id = excluded.user_id, updated_at = excluded.updated_at`,
+        args: [ownerId, Date.now()],
+    });
+    await addAllowedUser(ownerId, undefined, ownerId);
+    return ownerId;
+}
+
+export async function getOwner(): Promise<number | null> {
+    const row = await mainDb.execute({
+        sql: "SELECT user_id FROM owner WHERE id = 1",
+        args: [],
+    });
+    return row.rows.length > 0 ? (row.rows[0].user_id as number) : null;
+}
+
+export async function isOwner(userId: number): Promise<boolean> {
+    return (await getOwner()) === userId;
+}
+
+// ============================================================
 // ALLOWED USERS & GROUPS
 // ============================================================
 
@@ -207,24 +237,15 @@ export async function removeAllowedUser(userId: number): Promise<boolean> {
     return (res.rowsAffected ?? 0) > 0;
 }
 
-/**
- * Check if a user is allowed.
- * - Owner is always allowed
- * - User is allowed if their ID is in allowed_users as type='user'
- * - User is allowed if the current chat (group) is in allowed_users as type='group'
- */
 export async function isAllowedUser(userId: number, chatId?: number): Promise<boolean> {
-    // Owner is always allowed
     if (await isOwner(userId)) return true;
     
-    // Check if user is individually allowed
     const userRow = await mainDb.execute({ 
         sql: "SELECT 1 FROM allowed_users WHERE user_id = ? AND type = 'user'", 
         args: [userId] 
     });
     if (userRow.rows.length > 0) return true;
     
-    // Check if the current chat (group) is allowed
     if (chatId && chatId < 0) {
         const groupRow = await mainDb.execute({ 
             sql: "SELECT 1 FROM allowed_users WHERE user_id = ? AND type = 'group'", 
@@ -282,8 +303,6 @@ export async function getEntry(userId: number): Promise<{ type: string; username
         title: r.title as string | null,
     };
 }
-
-
 
 // ============================================================
 // HISTORY
