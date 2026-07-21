@@ -106,17 +106,21 @@ async function main() {
     // ============================================================
     // AUTH MIDDLEWARE
     // ============================================================
-    bot.use(async (ctx, next) => {
+        bot.use(async (ctx, next) => {
         if (!ctx.from) return;
         if (ctx.callbackQuery) return await next();
-        const allowed = await isAllowedUser(ctx.from.id);
+        
+        // Pass both user ID and chat ID (for group checking)
+        const allowed = await isAllowedUser(ctx.from.id, ctx.chat?.id);
         if (!allowed) {
             if (ctx.message) {
                 const owner = await getOwner();
+                const isGroup = ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup';
+                const suggestCmd = isGroup ? '/addgroup' : `/adduser ${ctx.from.id}`;
                 await safeReply(ctx,
-                    `⛔ Unauthorized\\. Your ID: \`${ctx.from.id}\`\n` +
+                    `⛔ Unauthorized\\. Your ID: \`${ctx.from.id}\`${isGroup ? `\\nChat ID: \`${ctx.chat.id}\`` : ""}\n` +
                     `Ask the owner${owner ? ` \\(ID: \`${owner}\`\\)` : ""} to run:\n` +
-                    `\`/adduser ${ctx.from.id}\``
+                    `\`${suggestCmd}\``
                 );
             }
             return;
