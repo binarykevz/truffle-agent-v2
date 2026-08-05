@@ -3,6 +3,7 @@ import * as cheerio from "cheerio";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { getConfig } from "./db";
+import { searchAndPlay } from "./music";
 import { isTermux, launchOnTermux, listInstalledApps, getKnownApps, APP_REGISTRY } from "./device";
 import { getConversionOptions } from "./converter";
 
@@ -93,6 +94,48 @@ export const tools: Tool[] = [
             const apps = await listInstalledApps();
             return apps.length === 0 ? "No apps." : `Apps (${apps.length}):\n${apps.slice(0, 100).join("\n")}`;
         }
+    },
+    {
+        name: "play_music",
+        description: "Search and play music from YouTube. Returns audio file and stylish player interface.",
+        parameters: {
+            type: "object",
+            properties: {
+                query: { type: "string", description: "Song name, artist, or lyrics to search" },
+            },
+            required: ["query"],
+        },
+        execute: async ({ query }, ctx) => {
+            await ctx.replyWithChatAction("upload_voice");
+            
+            const result = await searchAndPlay(query, ctx.from!.id);
+            
+            if (!result) {
+                return "❌ No songs found. Try a different search.";
+            }
+
+            // Send photo with caption and keyboard
+            if (result.photo) {
+                await ctx.replyWithPhoto(result.photo, {
+                    caption: result.caption,
+                    reply_markup: result.keyboard,
+                    parse_mode: "Markdown",
+                });
+            }
+
+            // Send audio file
+            if (result.audioPath && await Bun.file(result.audioPath).exists()) {
+                await ctx.replyWithAudio({
+                    source: result.audioPath,
+                    filename: `${result.videoId}.mp3`,
+                });
+                
+                // Cleanup
+                await Bun.file(result.audioPath).delete();
+            }
+
+            return `🎵 Playing music from search: "${query}"`;
+        },
     },
     {
         name: "request_file_upload",
