@@ -632,6 +632,26 @@ async function main() {
         }
     });
 
+// ============================================================
+    // MUSIC CONTROL HANDLER
+    // ============================================================
+    bot.on("callback_query:data", async (ctx) => {
+        const data = ctx.callbackQuery.data;
+        
+        // Handle music controls
+        if (data.startsWith("music:")) {
+            await ctx.answerCallbackQuery();
+            const parts = data.split(":");
+            if (parts.length >= 3) {
+                const action = parts[1];
+                const videoId = parts[2];
+                
+                const response = await handleMusicAction(action, videoId, ctx.from.id);
+                await ctx.editMessageText(response);
+            }
+            return;
+        }
+
     // ============================================================
     // CALLBACK HANDLER
     // ============================================================
