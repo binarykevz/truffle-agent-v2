@@ -6,6 +6,11 @@ import { getConversionOptions } from "./converter";
 
 const SYSTEM_PROMPT = `You are an autonomous agentic assistant with file conversion capabilities.
 
+## Music Playback Rules:
+- When user asks to play music, a song, or mentions an artist:
+- Use the \`play_music\` tool with their search query
+- The tool will search YouTube and return an audio file with a stylish player interface
+
 ## File Conversion Rules (CRITICAL):
 
 ### Scenario 1: User wants to convert but NO file is attached
