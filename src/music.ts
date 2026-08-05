@@ -1,6 +1,5 @@
 import { Innertube } from "youtubei.js";
 import { InlineKeyboard } from "grammy";
-import { spawn } from "bun";
 
 // Initialize YouTube client
 let yt: InstanceType<typeof Innertube> | null = null;
@@ -74,6 +73,40 @@ export function musicKeyboard(videoId: string) {
         .text("🔍 Search Again", "music:search");
 }
 
+// Helper to extract video ID from various YouTube Music result formats
+function extractVideoId(song: any): string | null {
+    // Try different possible properties
+    if (song.id) return song.id;
+    if (song.video_id) return song.video_id;
+    if (song.videoId) return song.videoId;
+    
+    // Check in nested structures
+    if (song.playlist_item_data?.video_id) return song.playlist_item_data.video_id;
+    if (song.overlay?.music_item_thumbnail_overlay_renderer?.content?.music_play_button_renderer?.play_navigation_endpoint?.watch_endpoint?.video_id) {
+        return song.overlay.music_item_thumbnail_overlay_renderer.content.music_play_button_renderer.play_navigation_endpoint.watch_endpoint.video_id;
+    }
+    
+    return null;
+}
+
+// Helper to extract title
+function extractTitle(song: any): string {
+    if (typeof song.title === 'string') return song.title;
+    if (song.title?.text) return song.title.text;
+    if (song.title?.runs?.[0]?.text) return song.title.runs[0].text;
+    return "Unknown Title";
+}
+
+// Helper to extract artists
+function extractArtists(song: any): string {
+    if (!song.artists) return "Unknown Artist";
+    if (Array.isArray(song.artists)) {
+        return song.artists.map((a: any) => a.name || a).join(", ");
+    }
+    if (song.artists?.text) return song.artists.text;
+    return "Unknown Artist";
+}
+
 // Search and play music
 export async function searchAndPlay(query: string, userId: number): Promise<{
     caption: string;
@@ -84,14 +117,27 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
 } | null> {
     const yt = await getYT();
     
+    console.log(`[Music] Searching for: ${query}`);
+    
     const search = await yt.music.search(query, { type: "song" });
     
     if (!search.contents || search.contents.length === 0) {
+        console.log("[Music] No results found");
         return null;
     }
 
     const song = search.contents[0];
-    const videoId = song.id;
+    console.log("[Music] First result:", JSON.stringify(song, null, 2).slice(0, 500));
+    
+    // Extract video ID using helper
+    const videoId = extractVideoId(song);
+    
+    if (!videoId) {
+        console.error("[Music] Could not extract video ID from result");
+        return null;
+    }
+    
+    console.log(`[Music] Found video ID: ${videoId}`);
     
     // Add to queue
     const state = getMusicState(userId);
@@ -103,47 +149,69 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
     const audioPath = `/tmp/music_${videoId}_${Date.now()}.mp3`;
     
     try {
+        console.log(`[Music] Downloading audio for: ${videoId}`);
+        
+        // Use the correct download API
         const stream = await yt.download(videoId, {
             type: "audio",
             quality: "best",
-            format: "mp4",
         });
 
+        console.log("[Music] Download stream created");
+        
+        // Write stream to file using Bun
         const file = Bun.file(audioPath);
         const writer = file.writer();
         
+        let bytesWritten = 0;
         for await (const chunk of stream) {
             writer.write(chunk);
+            bytesWritten += chunk.length;
         }
         
         await writer.end();
-    } catch (err) {
-        console.error("Audio download failed:", err);
+        console.log(`[Music] Downloaded ${bytesWritten} bytes to ${audioPath}`);
+    } catch (err: any) {
+        console.error("[Music] Audio download failed:", err.message);
+        console.error(err.stack);
+        // Continue anyway - we'll still show the UI
     }
 
     // Get more details
-    const info = await yt.getInfo(videoId);
-    const duration = info.basic_info.duration || 0;
-    const currentTime = 78; // Simulated current time for demo
+    let duration = 180; // Default 3 minutes
+    let currentTime = 0;
+    
+    try {
+        const info = await yt.getInfo(videoId);
+        duration = info.basic_info?.duration || 180;
+        console.log(`[Music] Video duration: ${duration}s`);
+    } catch (err) {
+        console.warn("[Music] Could not fetch video info:", err);
+    }
+
+    const title = extractTitle(song);
+    const artists = extractArtists(song);
+    const album = song.album?.name || "Single";
+    const thumbnail = song.thumbnails?.[0]?.url || "";
 
     const caption = `🎵 **Now Playing**
 
-**${song.title}**
-${song.artists?.map((a: any) => a.name).join(", ") || "Unknown Artist"}
+**${title}**
+${artists}
 
-💿 ${song.album?.name || "Single"}
+💿 ${album}
 
 ⏱ ${formatDuration(currentTime)} / ${formatDuration(duration)}
 
-${createProgressBar(currentTime, duration)}
+${createProgressBar(currentTime, duration, 15)}
 
 🔊 High Quality AAC`;
 
     return {
         caption,
-        photo: song.thumbnails?.[0]?.url || "",
+        photo: thumbnail,
         keyboard: musicKeyboard(videoId),
-        audioPath,
+        audioPath: await Bun.file(audioPath).exists() ? audioPath : undefined,
         videoId,
     };
 }
@@ -180,8 +248,7 @@ export async function handleMusicAction(
 
         case "shuffle":
             state.isShuffle = !state.isShuffle;
-            if (state.isShuffle) {
-                // Shuffle the remaining queue
+            if (state.isShuffle && state.queue.length > 1) {
                 const remaining = state.queue.slice(state.currentIndex + 1);
                 for (let i = remaining.length - 1; i > 0; i--) {
                     const j = Math.floor(Math.random() * (i + 1));
