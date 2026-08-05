@@ -1,13 +1,28 @@
 import { Innertube } from "youtubei.js";
 import { InlineKeyboard } from "grammy";
+import { spawn } from "bun";
 
 let yt: InstanceType<typeof Innertube> | null = null;
 
 async function getYT() {
     if (!yt) {
-        yt = await Innertube.create();
+        yt = await Innertube.create({
+            cache: new UniversalCache(false),
+            generate_session_locally: true,
+        });
     }
     return yt;
+}
+
+// Simple in-memory cache for youtubei.js
+class UniversalCache {
+    private cache = new Map<string, any>();
+    constructor(private enabled: boolean) {}
+    get(key: string) { return this.cache.get(key); }
+    set(key: string, value: any) { this.cache.set(key, value); }
+    remove(key: string) { this.cache.delete(key); }
+    has(key: string) { return this.cache.has(key); }
+    clear() { this.cache.clear(); }
 }
 
 // Music player state per user
@@ -42,7 +57,7 @@ function createProgressBar(current: number, total: number, width: number = 12): 
     if (total <= 0) return "▱".repeat(width);
     const progress = Math.min(Math.floor((current / total) * width), width);
     const filled = "▰".repeat(progress);
-    const empty = "▱".repeat(width - progress - 1);
+    const empty = "▱".repeat(Math.max(width - progress - 1, 0));
     return `${filled}●${empty}`;
 }
 
@@ -70,12 +85,173 @@ export function musicKeyboard(videoId: string) {
         .text("🔍 Search Again", "music:search");
 }
 
+// ============================================================
+// DOWNLOAD METHODS
+// ============================================================
+
 /**
- * Extract the first song item from YouTube Music search results.
- * Handles the MusicShelf -> contents -> MusicResponsiveListItem structure.
+ * Method 1: Try youtubei.js direct download
  */
+async function downloadWithYoutubeiJS(videoId: string, outputPath: string): Promise<boolean> {
+    try {
+        const yt = await getYT();
+        console.log(`[Music] Attempting download with youtubei.js: ${videoId}`);
+
+        const stream = await yt.download(videoId, {
+            type: "audio",
+            quality: "bestaudio",
+            format: "mp4",
+            client: "WEB_REMIX", // Use YouTube Music client which has fewer restrictions
+        });
+
+        const file = Bun.file(outputPath);
+        const writer = file.writer();
+
+        let bytesWritten = 0;
+        for await (const chunk of stream) {
+            writer.write(chunk);
+            bytesWritten += chunk.length;
+        }
+        await writer.end();
+
+        console.log(`[Music] ✓ youtubei.js downloaded ${bytesWritten} bytes`);
+        return bytesWritten > 10000; // Consider successful if we got real data
+    } catch (err: any) {
+        console.warn(`[Music] youtubei.js download failed: ${err.message}`);
+        return false;
+    }
+}
+
+/**
+ * Method 2: Fallback to yt-dlp (more reliable for restricted videos)
+ */
+async function downloadWithYtDlp(videoId: string, outputPath: string): Promise<boolean> {
+    try {
+        console.log(`[Music] Attempting download with yt-dlp: ${videoId}`);
+        const url = `https://www.youtube.com/watch?v=${videoId}`;
+
+        const proc = spawn([
+            "yt-dlp",
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--audio-quality", "0",
+            "--no-playlist",
+            "--no-warnings",
+            "-o", outputPath.replace(".mp3", ".%(ext)s"),
+            url,
+        ], {
+            stdout: "pipe",
+            stderr: "pipe",
+        });
+
+        const [stdout, stderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+        ]);
+
+        const exitCode = await proc.exited;
+
+        if (exitCode !== 0) {
+            console.warn(`[Music] yt-dlp failed (exit ${exitCode}):`, stderr.slice(0, 300));
+            return false;
+        }
+
+        // yt-dlp may save as .mp3 directly or with a different extension
+        const expectedPath = outputPath.replace(".mp3", ".mp3");
+        if (await Bun.file(expectedPath).exists()) {
+            const size = Bun.file(expectedPath).size;
+            console.log(`[Music] ✓ yt-dlp downloaded ${size} bytes`);
+            return size > 10000;
+        }
+
+        // Try common alternative extensions yt-dlp might use
+        for (const ext of ["mp3", "m4a", "webm", "opus"]) {
+            const altPath = outputPath.replace(".mp3", `.${ext}`);
+            if (await Bun.file(altPath).exists()) {
+                // Rename to our expected path
+                const file = Bun.file(altPath);
+                await Bun.write(outputPath, file);
+                await Bun.file(altPath).delete();
+                const size = Bun.file(outputPath).size;
+                console.log(`[Music] ✓ yt-dlp downloaded ${size} bytes (was .${ext})`);
+                return size > 10000;
+            }
+        }
+
+        console.warn("[Music] yt-dlp finished but output file not found");
+        return false;
+    } catch (err: any) {
+        console.warn(`[Music] yt-dlp error: ${err.message}`);
+        return false;
+    }
+}
+
+/**
+ * Method 3: Try youtubei.js with different clients
+ */
+async function downloadWithAlternateClients(videoId: string, outputPath: string): Promise<boolean> {
+    const yt = await getYT();
+    const clients = ["ANDROID_MUSIC", "IOS", "WEB"] as const;
+
+    for (const client of clients) {
+        try {
+            console.log(`[Music] Trying youtubei.js with client: ${client}`);
+            const stream = await yt.download(videoId, {
+                type: "audio",
+                quality: "bestaudio",
+                client: client as any,
+            });
+
+            const file = Bun.file(outputPath);
+            const writer = file.writer();
+            let bytesWritten = 0;
+
+            for await (const chunk of stream) {
+                writer.write(chunk);
+                bytesWritten += chunk.length;
+            }
+            await writer.end();
+
+            if (bytesWritten > 10000) {
+                console.log(`[Music] ✓ Downloaded with ${client}: ${bytesWritten} bytes`);
+                return true;
+            }
+        } catch (err: any) {
+            console.warn(`[Music] Client ${client} failed: ${err.message}`);
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Main download function that tries multiple methods
+ */
+async function downloadAudio(videoId: string, outputPath: string): Promise<boolean> {
+    // Method 1: youtubei.js with WEB_REMIX (YouTube Music)
+    if (await downloadWithYoutubeiJS(videoId, outputPath)) {
+        return true;
+    }
+
+    // Method 2: yt-dlp (most reliable for restricted videos)
+    if (await downloadWithYtDlp(videoId, outputPath)) {
+        return true;
+    }
+
+    // Method 3: youtubei.js with alternate clients
+    if (await downloadWithAlternateClients(videoId, outputPath)) {
+        return true;
+    }
+
+    console.error(`[Music] All download methods failed for ${videoId}`);
+    return false;
+}
+
+// ============================================================
+// SEARCH & PLAY
+// ============================================================
+
 function findFirstSong(searchResult: any): any | null {
-    // Case 1: Direct array of items
     if (Array.isArray(searchResult)) {
         for (const item of searchResult) {
             if (item.type === "MusicResponsiveListItem") return item;
@@ -85,7 +261,6 @@ function findFirstSong(searchResult: any): any | null {
         }
     }
 
-    // Case 2: search.contents is an array of shelves/items
     if (searchResult?.contents && Array.isArray(searchResult.contents)) {
         // First try to find a "Songs" shelf specifically
         for (const shelf of searchResult.contents) {
@@ -109,7 +284,6 @@ function findFirstSong(searchResult: any): any | null {
         }
     }
 
-    // Case 3: The result itself is a shelf
     if (searchResult?.type === "MusicShelf" && searchResult.contents?.length > 0) {
         return searchResult.contents[0];
     }
@@ -117,19 +291,13 @@ function findFirstSong(searchResult: any): any | null {
     return null;
 }
 
-/**
- * Extract video ID from a MusicResponsiveListItem.
- * In youtubei.js v11+, the item has a direct `id` property.
- */
 function extractVideoId(item: any): string | null {
     if (!item) return null;
 
-    // Direct properties (most common in newer versions)
     if (item.id) return String(item.id);
     if (item.video_id) return String(item.video_id);
     if (item.videoId) return String(item.videoId);
 
-    // Navigation endpoint (deep path used by some result formats)
     try {
         const navEndpoint = item.overlay?.music_item_thumbnail_overlay_renderer
             ?.content?.music_play_button_renderer
@@ -137,26 +305,15 @@ function extractVideoId(item: any): string | null {
         if (navEndpoint) return String(navEndpoint);
     } catch {}
 
-    // Fallback: try the youtubei.js native navigation method
-    try {
-        if (typeof item.play === "function") {
-            // Some versions expose a play method that contains the video ID internally
-            // We can't use this directly, but it confirms the item is playable
-        }
-    } catch {}
-
     return null;
 }
 
 function extractTitle(item: any): string {
     if (!item) return "Unknown Title";
-
-    // Newer youtubei.js exposes .title directly as string or YTNode
     if (typeof item.title === "string") return item.title;
     if (item.title?.text) return item.title.text;
     if (item.title?.runs?.[0]?.text) return item.title.runs[0].text;
 
-    // Fallback: flex_columns[0] usually holds the title
     try {
         const col = item.flex_columns?.[0];
         if (col?.data?.runs?.[0]?.text) return col.data.runs[0].text;
@@ -167,15 +324,12 @@ function extractTitle(item: any): string {
 
 function extractArtists(item: any): string {
     if (!item) return "Unknown Artist";
-
-    // Direct artists array
     if (Array.isArray(item.artists)) {
         return item.artists.map((a: any) => a.name || String(a)).join(", ");
     }
     if (item.artists?.text) return item.artists.text;
     if (item.artists?.runs?.[0]?.text) return item.artists.runs[0].text;
 
-    // flex_columns[1] often holds the artist
     try {
         const col = item.flex_columns?.[1];
         if (col?.data?.runs?.[0]?.text) return col.data.runs[0].text;
@@ -188,7 +342,6 @@ function extractAlbum(item: any): string {
     if (item?.album?.name) return item.album.name;
     if (item?.album?.text) return item.album.text;
 
-    // Sometimes in flex_columns[2]
     try {
         const col = item.flex_columns?.[2];
         if (col?.data?.runs?.[0]?.text) return col.data.runs[0].text;
@@ -200,8 +353,7 @@ function extractAlbum(item: any): string {
 function extractThumbnail(item: any): string {
     if (item?.thumbnail?.length) return item.thumbnail[0].url;
     if (item?.thumbnails?.length) return item.thumbnails[0].url;
-    
-    // Try deeper paths
+
     try {
         if (item.thumbnail_renderer?.thumbnails?.length) {
             return item.thumbnail_renderer.thumbnails[0].url;
@@ -209,6 +361,10 @@ function extractThumbnail(item: any): string {
     } catch {}
 
     return "";
+}
+
+function escapeMd(text: string): string {
+    return text.replace(/[_*`\[\]()~>#+\-=|{}.!\\]/g, "\\$&");
 }
 
 export async function searchAndPlay(query: string, userId: number): Promise<{
@@ -229,8 +385,6 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
         return null;
     }
 
-    console.log(`[Music] Search type: ${search.type}, has contents: ${!!search.contents}`);
-
     const song = findFirstSong(search);
 
     if (!song) {
@@ -243,7 +397,6 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
     const videoId = extractVideoId(song);
     if (!videoId) {
         console.error("[Music] Could not extract video ID. Song keys:", Object.keys(song));
-        console.error("[Music] Full song object:", JSON.stringify(song, null, 2).slice(0, 1500));
         return null;
     }
 
@@ -255,39 +408,15 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
     state.currentIndex = state.queue.length - 1;
     state.isPlaying = true;
 
-    // Download audio
+    // Download audio with multiple fallback methods
     const audioPath = `/tmp/music_${videoId}_${Date.now()}.mp3`;
+    const downloadSuccess = await downloadAudio(videoId, audioPath);
 
-    try {
-        console.log(`[Music] Downloading audio for: ${videoId}`);
-
-        const stream = await yt.download(videoId, {
-            type: "audio",
-            quality: "bestaudio",
-            format: "mp4",
-        });
-
-        const file = Bun.file(audioPath);
-        const writer = file.writer();
-
-        let bytesWritten = 0;
-        for await (const chunk of stream) {
-            writer.write(chunk);
-            bytesWritten += chunk.length;
-        }
-        await writer.end();
-
-        console.log(`[Music] ✓ Downloaded ${bytesWritten} bytes to ${audioPath}`);
-    } catch (err: any) {
-        console.error("[Music] Audio download failed:", err.message);
-        // Continue - we still want to show the UI even if download failed
-    }
-
-    // Get video duration from basic info
+    // Get video duration
     let duration = 180;
     try {
         const info = await yt.getInfo(videoId);
-        duration = info.basic_info?.duration || info.page?.[0]?.microformat?.microformat_data?.length_seconds || 180;
+        duration = info.basic_info?.duration || 180;
         console.log(`[Music] Video duration: ${duration}s`);
     } catch (err: any) {
         console.warn("[Music] Could not fetch video info:", err.message);
@@ -309,19 +438,15 @@ ${escapeMd(artists)}
 
 ${createProgressBar(0, duration, 15)}
 
-🔊 High Quality AAC`;
+🔊 High Quality AAC${downloadSuccess ? "" : "\n⚠️ Audio stream unavailable, showing preview only"}`;
 
     return {
         caption,
         photo: thumbnail,
         keyboard: musicKeyboard(videoId),
-        audioPath: await Bun.file(audioPath).exists() ? audioPath : undefined,
+        audioPath: downloadSuccess && await Bun.file(audioPath).exists() ? audioPath : undefined,
         videoId,
     };
-}
-
-function escapeMd(text: string): string {
-    return text.replace(/[_*`\[\]()~>#+\-=|{}.!\\]/g, "\\$&");
 }
 
 export async function handleMusicAction(
