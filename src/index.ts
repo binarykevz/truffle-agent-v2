@@ -137,17 +137,62 @@ async function main() {
         // ============================================================
     // YOUTUBE COOKIES MANAGEMENT (owner only)
     // ============================================================
-    bot.command("setcookies", async (ctx) => {
+        bot.command("setcookies", async (ctx) => {
         if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
         pendingCookies.add(ctx.from.id);
         await safeReply(ctx,
-            `🍪 **Set YouTube Cookies**\n\n` +
-            `Upload your \`cookies\\.txt\` file \\(Netscape format\\) as the next message,\n` +
-            `or paste the cookie content directly\\.\n\n` +
+            `🍪 **Set YouTube Music Cookies**\n\n` +
+            `**How to export cookies:**\n` +
+            `1\\. Open YouTube Music in your browser and log in\n` +
+            `2\\. Open DevTools \\(F12\\) → Network tab\n` +
+            `3\\. Refresh page and click any request\n` +
+            `4\\. Find the \`Cookie\` header in Request Headers\n` +
+            `5\\. Copy the entire value \\(looks like: \`key\\=value; key2\\=value2\`\\)\n` +
+            `6\\. Paste it here or upload as a \\.txt file\n\n` +
             `Type /cancel to abort\\.`
         );
     });
 
+    bot.command("testcookies", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+
+        const content = await getConfig("youtube_cookies");
+        if (!content) {
+            await ctx.reply("❌ No cookies configured. Use /setcookies first.");
+            return;
+        }
+
+        await ctx.reply("🔍 Testing cookies...");
+
+        try {
+            // Dynamically import to use the test function from music.ts
+            const { testCookies } = await import("./music");
+            const result = await testCookies();
+
+            if (result.valid) {
+                await ctx.reply(
+                    `✅ **Cookies are valid!**\n\n` +
+                    `${result.message}\n\n` +
+                    `You can now download music\\.`,
+                    { parse_mode: "Markdown" }
+                );
+            } else {
+                await ctx.reply(
+                    `❌ **Cookies are invalid**\n\n` +
+                    `Error: \`${escapeMarkdown(result.message.slice(0, 200))}\`\n\n` +
+                    `**How to fix:**\n` +
+                    `1\\. Log into YouTube Music in your browser\n` +
+                    `2\\. Copy the Cookie header from DevTools\n` +
+                    `3\\. Use /setcookies to paste fresh cookies\n\n` +
+                    `⚠️ YouTube cookies expire quickly\\.`,
+                    { parse_mode: "Markdown" }
+                );
+            }
+        } catch (err: any) {
+            await ctx.reply(`❌ Test failed: ${escapeMarkdown(err.message)}`);
+        }
+    });
+    
     bot.command("clearcookies", async (ctx) => {
         if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
         await deleteConfig("youtube_cookies");
