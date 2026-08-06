@@ -4,7 +4,7 @@ import {
     initMainDB, initCommandsDB, initMemoryDB,
     seedOwner, getOwner, isOwner, isAllowedUser,
     addAllowedUser, removeAllowedUser, listAllowedUsers,
-    getConfig, setConfig,
+    getConfig, setConfig,deleteConfig,
     getCommand, saveCommand, deleteCommand, toggleCommand, listCommands,
     updateCommandDescription,
 } from "./db";
@@ -55,6 +55,8 @@ const pendingFeatures = new Map<number, {
     code?: string;
     isEdit?: boolean;
 }>();
+
+const pendingCookies = new Set<number>();
 
 const conversionJobs = new Map<string, { filePath: string; fileName: string; ext: string; userId: number }>();
 
@@ -131,6 +133,45 @@ async function main() {
     // ============================================================
     // META-COMMANDS
     // ============================================================
+
+        // ============================================================
+    // YOUTUBE COOKIES MANAGEMENT (owner only)
+    // ============================================================
+    bot.command("setcookies", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        pendingCookies.add(ctx.from.id);
+        await safeReply(ctx,
+            `🍪 **Set YouTube Cookies**\n\n` +
+            `Upload your \`cookies\\.txt\` file \\(Netscape format\\) as the next message,\n` +
+            `or paste the cookie content directly\\.\n\n` +
+            `Type /cancel to abort\\.`
+        );
+    });
+
+    bot.command("clearcookies", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        await deleteConfig("youtube_cookies");
+        pendingCookies.delete(ctx.from.id);
+        await ctx.reply("🍪 YouTube cookies cleared from database.");
+    });
+
+    bot.command("cookiesstatus", async (ctx) => {
+        if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
+        const content = await getConfig("youtube_cookies");
+        if (!content) {
+            await ctx.reply("🍪 No cookies configured.\nUse /setcookies to add them.");
+        } else {
+            const lines = content.split("\n").filter(l => l.trim() && !l.startsWith("#")).length;
+            await ctx.reply(
+                `🍪 **Cookies configured**\n` +
+                `• Size: ${content.length} characters\n` +
+                `• Entries: ~${lines} cookies\n` +
+                `• Stored in: Turso DB\n\n` +
+                `Use /clearcookies to remove.`,
+                { parse_mode: "Markdown" }
+            );
+        }
+    });
 
     bot.command("addfeature", async (ctx) => {
         if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
@@ -209,13 +250,17 @@ async function main() {
         await safeReply(ctx, `**/${escapeMarkdown(cmd.name)}**\n\`\`\`\n${escapeMarkdown(code)}\n\`\`\``);
     });
 
-    bot.command("cancel", async (ctx) => {
+        bot.command("cancel", async (ctx) => {
+        let cancelled = false;
         if (pendingFeatures.has(ctx.from.id)) {
             pendingFeatures.delete(ctx.from.id);
-            await ctx.reply("❌ Cancelled.");
-        } else {
-            await ctx.reply("Nothing to cancel.");
+            cancelled = true;
         }
+        if (pendingCookies.has(ctx.from.id)) {
+            pendingCookies.delete(ctx.from.id);
+            cancelled = true;
+        }
+        await ctx.reply(cancelled ? "❌ Cancelled." : "Nothing to cancel.");
     });
 
     bot.command("cachestats", async (ctx) => {
@@ -417,6 +462,42 @@ async function main() {
     // FILE HANDLERS
     // ============================================================
         bot.on("message:document", async (ctx) => {
+             if (pendingCookies.has(ctx.from.id)) {
+            const doc = ctx.message.document;
+            const fileName = doc.file_name?.toLowerCase() || "";
+            
+            if (!fileName.endsWith(".txt") && !fileName.includes("cookie")) {
+                await ctx.reply("⚠️ Please upload a `cookies.txt` file, or type /cancel.");
+                return;
+            }
+            
+            try {
+                await ctx.replyWithChatAction("upload_document");
+                const file = await ctx.api.getFile(doc.file_id);
+                const fileLink = `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
+                const content = await new Response(await fetch(fileLink)).text();
+                
+                if (content.trim().length < 50) {
+                    await ctx.reply("⚠️ The file appears to be empty or too small.");
+                    return;
+                }
+                
+                await setConfig("youtube_cookies", content);
+                pendingCookies.delete(ctx.from.id);
+                
+                const lines = content.split("\n").filter(l => l.trim() && !l.startsWith("#")).length;
+                await ctx.reply(
+                    `✅ **Cookies saved to database!**\n` +
+                    `• Size: ${content.length} characters\n` +
+                    `• Entries: ~${lines} cookies\n\n` +
+                    `🎵 Music downloads will now use these cookies.`,
+                    { parse_mode: "Markdown" }
+                );
+            } catch (err: any) {
+                await ctx.reply(`❌ Failed to read file: ${err.message}`);
+            }
+            return;
+        }
         const doc = ctx.message.document;
         const ext = doc.file_name?.split('.').pop()?.toLowerCase() || "bin";
         const jobId = crypto.randomUUID().slice(0, 8);
@@ -543,6 +624,35 @@ async function main() {
             }
         }
 
+if (pendingCookies.has(userId)) {
+            if (text.trim() === "/cancel") return; // handled by cancel command
+            
+            // Basic validation: cookies.txt should have tab-separated lines or mention youtube
+            const looksLikeCookies = 
+                text.includes("\t") || 
+                text.toLowerCase().includes("youtube") ||
+                text.includes("# Netscape HTTP Cookie File");
+            
+            if (!looksLikeCookies) {
+                await ctx.reply(
+                    "⚠️ That doesn't look like cookie content.\n" +
+                    "Upload a `cookies.txt` file instead, or type /cancel."
+                );
+                return;
+            }
+            
+            await setConfig("youtube_cookies", text);
+            pendingCookies.delete(userId);
+            const lines = text.split("\n").filter(l => l.trim() && !l.startsWith("#")).length;
+            await ctx.reply(
+                `✅ **Cookies saved to database!**\n` +
+                `• Size: ${text.length} characters\n` +
+                `• Entries: ~${lines} cookies`,
+                { parse_mode: "Markdown" }
+            );
+            return;
+        }
+        
         // 2. Pending feature input
         const pending = pendingFeatures.get(userId);
         if (pending) {
