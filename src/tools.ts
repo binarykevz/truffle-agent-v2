@@ -1,4 +1,4 @@
-import { Context } from "grammy";
+import { Context, nputFile } from "grammy";
 import * as cheerio from "cheerio";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
@@ -96,8 +96,9 @@ export const tools: Tool[] = [
         }
     },
     {
+           {
         name: "play_music",
-        description: "Search and play music from YouTube. Returns audio file and stylish player interface.",
+        description: "Search and play music. Returns audio file and stylish player interface.",
         parameters: {
             type: "object",
             properties: {
@@ -114,32 +115,58 @@ export const tools: Tool[] = [
                 return "❌ No songs found. Try a different search.";
             }
 
-            // Send photo with caption and keyboard
+            // 1. Send photo with caption and keyboard
             try {
                 await ctx.replyWithPhoto(result.photo, {
                     caption: result.caption,
                     reply_markup: result.keyboard,
                     parse_mode: "Markdown",
                 });
-            } catch {
+            } catch (err: any) {
+                console.warn(`[Music] Photo send failed, falling back to text: ${err.message}`);
                 await ctx.reply(result.caption, {
                     reply_markup: result.keyboard,
                     parse_mode: "Markdown",
                 });
             }
 
-            // Send audio file
-            if (result.audioPath && await Bun.file(result.audioPath).exists()) {
-                await ctx.replyWithAudio({
-                    source: result.audioPath,
-                    filename: `${result.videoId}.mp3`,
-                });
-                
-                // Cleanup
-                await Bun.file(result.audioPath).delete();
+            // 2. Send the audio file
+            if (result.audioPath) {
+                try {
+                    console.log(`[Music] 📤 Uploading audio to Telegram: ${result.audioPath}`);
+                    
+                    // Use explicit InputFile for reliable streaming
+                    const audioFile = new InputFile(result.audioPath);
+                    
+                    await ctx.replyWithAudio(audioFile, {
+                        title: query,
+                        performer: "Truffle Music",
+                    });
+                    
+                    console.log(`[Music] ✅ Audio successfully sent to Telegram`);
+                } catch (err: any) {
+                    console.error(`[Music] ❌ Telegram audio upload failed: ${err.message}`);
+                    
+                    // Fallback: If Telegram rejects it as "audio" (due to wrong headers/codec), 
+                    // send it as a generic "document" which bypasses format checks.
+                    try {
+                        console.log(`[Music] 📎 Attempting fallback: sending as Document...`);
+                        await ctx.replyWithDocument(new InputFile(result.audioPath));
+                        console.log(`[Music] ✅ Fallback document sent successfully`);
+                    } catch (docErr: any) {
+                        console.error(`[Music] ❌ Document fallback also failed: ${docErr.message}`);
+                        await ctx.reply("⚠️ Downloaded the song, but Telegram rejected the file format.");
+                    }
+                } finally {
+                    // Clean up the temp file safely
+                    try { 
+                        await Bun.file(result.audioPath).delete(); 
+                        console.log(`[Music] 🧹 Cleaned up temp file`);
+                    } catch {}
+                }
             }
 
-            return `🎵 Playing music from search: "${query}"`;
+            return `🎵 Played: ${query}`;
         },
     },
     {
