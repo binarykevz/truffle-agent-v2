@@ -133,27 +133,51 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
         state.isPlaying = true;
 
         // ============================================================
-        // GET STREAM URL (fixed approach)
+        // GET STREAM URL (robust approach with debugging)
         // ============================================================
         const audioPath = `/tmp/music_${videoId}_${Date.now()}.mp3`;
         let downloadSuccess = false;
         let streamUrl: string | null = null;
 
         try {
-            // Method 1: Try streamUrl from search results directly
+            // Log the song object to see what's available
+            console.log(`[Music] Song object keys: ${Object.keys(song).join(", ")}`);
+            console.log(`[Music] Song videoId: ${song.videoId}`);
+            console.log(`[Music] Song streamUrl: ${song.streamUrl || "NOT PRESENT"}`);
+
+            // Method 1: Check if streamUrl is already in search results
             if (song.streamUrl) {
                 streamUrl = song.streamUrl;
                 console.log(`[Music] ✓ Stream URL from search results`);
             } else {
-                // Method 2: Get detailed song info which includes streamUrl
-                console.log(`[Music] Fetching detailed song info...`);
-                const detailedSong = await yt.getSong(videoId);
-                
-                if (detailedSong && detailedSong.streamUrl) {
-                    streamUrl = detailedSong.streamUrl;
-                    console.log(`[Music] ✓ Stream URL from getSong()`);
-                } else {
-                    console.warn("[Music] No stream URL found in song object");
+                // Method 2: Try getSong with error handling
+                try {
+                    console.log(`[Music] Attempting getSong(${videoId})...`);
+                    const detailedSong = await yt.getSong(videoId);
+                    
+                    if (detailedSong) {
+                        console.log(`[Music] getSong returned keys: ${Object.keys(detailedSong).join(", ")}`);
+                        if (detailedSong.streamUrl) {
+                            streamUrl = detailedSong.streamUrl;
+                            console.log(`[Music] ✓ Stream URL from getSong()`);
+                        }
+                    } else {
+                        console.warn("[Music] getSong returned null");
+                    }
+                } catch (err: any) {
+                    console.warn(`[Music] getSong failed: ${err.message}`);
+                    
+                    // Method 3: Try getQueue as alternative
+                    try {
+                        console.log(`[Music] Attempting getQueue(${videoId})...`);
+                        const queue = await yt.getQueue(videoId);
+                        if (queue && queue.length > 0 && queue[0].streamUrl) {
+                            streamUrl = queue[0].streamUrl;
+                            console.log(`[Music] ✓ Stream URL from getQueue()`);
+                        }
+                    } catch (queueErr: any) {
+                        console.warn(`[Music] getQueue failed: ${queueErr.message}`);
+                    }
                 }
             }
 
@@ -176,10 +200,13 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
                 } else {
                     console.warn(`[Music] Stream download failed: ${response.status}`);
                 }
+            } else {
+                console.warn("[Music] No stream URL found via any method");
             }
         } catch (err: any) {
             console.error("[Music] Audio download failed:", err.message);
         }
+        
 
         // Build caption
         const title = song.name || "Unknown Title";
