@@ -1,7 +1,8 @@
 import { Innertube } from "youtubei.js";
 import { InlineKeyboard } from "grammy";
 import { spawn } from "bun";
-
+import { getConfig } from "./db";
+import { createHash } from "crypto";
 let yt: InstanceType<typeof Innertube> | null = null;
 
 async function getYT() {
@@ -13,9 +14,43 @@ async function getYT() {
     return yt;
 }
 
-// Optional: path to cookies.txt (leave null if not using cookies)
-const COOKIES_PATH = "/home/kevz/cookies.txt";
+// Cache for the written cookies file (avoid rewriting on every download)
+let cachedCookiesFile: { hash: string; path: string } | null = null;
 
+/**
+ * Read the raw cookie content from Turso config.
+ */
+async function getCookiesContent(): Promise<string | null> {
+    const content = await getConfig("youtube_cookies");
+    if (!content || content.trim().length === 0) return null;
+    return content;
+}
+
+/**
+ * Write cookie content to a temp file (yt-dlp requires a file path).
+ * Caches the file so we only rewrite when content changes.
+ */
+async function prepareCookiesFile(): Promise<string | null> {
+    const content = await getCookiesContent();
+    if (!content) return null;
+
+    const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
+
+    // Reuse cached file if content unchanged
+    if (
+        cachedCookiesFile &&
+        cachedCookiesFile.hash === hash &&
+        await Bun.file(cachedCookiesFile.path).exists()
+    ) {
+        return cachedCookiesFile.path;
+    }
+
+    const path = `/tmp/yt_cookies_${hash}.txt`;
+    await Bun.write(path, content);
+    cachedCookiesFile = { hash, path };
+    console.log(`[Music] 🍪 Cookies written to ${path} (${content.length} chars)`);
+    return path;
+}
 interface MusicState {
     queue: string[];
     currentIndex: number;
@@ -113,10 +148,11 @@ async function runYtDlp(videoId: string, outputPath: string, extraArgs: string[]
     ];
 
     // Add cookies if the file exists
-    const cookiesExist = await Bun.file(COOKIES_PATH).exists();
-    if (cookiesExist) {
-        baseArgs.splice(1, 0, "--cookies", COOKIES_PATH);
-        console.log("[Music] yt-dlp using cookies");
+        // Write cookies from DB to temp file (if configured)
+    const cookiesPath = await prepareCookiesFile();
+    if (cookiesPath) {
+        baseArgs.splice(1, 0, "--cookies", cookiesPath);
+        console.log(`[Music] 🍪 yt-dlp using cookies from Turso DB`);
     }
 
     try {
