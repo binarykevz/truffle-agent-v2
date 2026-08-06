@@ -96,7 +96,7 @@ export const tools: Tool[] = [
         }
     },
     {
-           {
+           
         name: "play_music",
         description: "Search and play music. Returns audio file and stylish player interface.",
         parameters: {
