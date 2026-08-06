@@ -106,7 +106,7 @@ export const tools: Tool[] = [
             },
             required: ["query"],
         },
-        execute: async ({ query }, ctx) => {
+               execute: async ({ query }, ctx) => {
             await ctx.replyWithChatAction("upload_voice");
             
             const result = await searchAndPlay(query, ctx.from!.id);
@@ -129,41 +129,59 @@ export const tools: Tool[] = [
                     parse_mode: "Markdown",
                 });
             }
-            
 
             // 2. Send the audio file
             if (result.audioPath) {
                 try {
-                    console.log(`[Music] 📤 Uploading audio to Telegram: ${result.audioPath}`);
+                    const bunFile = Bun.file(result.audioPath);
+                    const fileSize = bunFile.size;
+                    console.log(`[Music] 📤 Preparing upload: ${result.audioPath} (${fileSize} bytes)`);
                     
-                    // Use explicit InputFile for reliable streaming
-                    const audioFile = new InputFile(result.audioPath);
-                    
-                    await ctx.replyWithAudio(audioFile, {
-                        title: query,
-                        performer: "Truffle Music",
-                    });
-                    
-                    console.log(`[Music] ✅ Audio successfully sent to Telegram`);
-                } catch (err: any) {
-                    console.error(`[Music] ❌ Telegram audio upload failed: ${err.message}`);
-                    
-                    // Fallback: If Telegram rejects it as "audio" (due to wrong headers/codec), 
-                    // send it as a generic "document" which bypasses format checks.
-                    try {
-                        console.log(`[Music] 📎 Attempting fallback: sending as Document...`);
-                        await ctx.replyWithDocument(new InputFile(result.audioPath));
-                        console.log(`[Music] ✅ Fallback document sent successfully`);
-                    } catch (docErr: any) {
-                        console.error(`[Music] ❌ Document fallback also failed: ${docErr.message}`);
-                        await ctx.reply("⚠️ Downloaded the song, but Telegram rejected the file format.");
+                    if (fileSize < 10000) {
+                        throw new Error("File is too small, likely an error response");
                     }
+
+                    // Read the entire file into memory (avoids Bun stream lock issues with Grammy)
+                    const buffer = await bunFile.arrayBuffer();
+                    
+                    // 🕵️ Detective check: Is it actually audio, or an HTML/JSON error page?
+                    const header = new TextDecoder().decode(buffer.slice(0, 100));
+                    if (header.trim().startsWith("<") || header.trim().startsWith("{") || header.trim().startsWith("[")) {
+                        console.error(`[Music] ❌ Downloaded file is NOT audio! First 100 chars:\n${header}`);
+                        await ctx.reply("⚠️ The download API returned a text/JSON error instead of an audio file.");
+                        return `Played: ${query} (but audio file was invalid)`;
+                    }
+
+                    // Create InputFile with explicit filename and binary Uint8Array
+                    const safeName = `${query.replace(/[^\w\s.-]/gi, '').slice(0, 50)}.mp3`;
+                    const inputFile = new InputFile(new Uint8Array(buffer), safeName);
+                    
+                    // Try sending as Audio first
+                    try {
+                        await ctx.replyWithAudio(inputFile, {
+                            title: query.slice(0, 255),
+                            performer: "Truffle Music",
+                        });
+                        console.log(`[Music] ✅ Audio successfully sent to Telegram`);
+                    } catch (audioErr: any) {
+                        // Log the exact Telegram error
+                        console.warn(`[Music] ⚠️ replyWithAudio failed: ${audioErr.description || audioErr.message}`);
+                        
+                        // Fallback to Document (bypasses Telegram's strict audio header checks)
+                        try {
+                            await ctx.replyWithDocument(inputFile);
+                            console.log(`[Music] ✅ Document fallback sent successfully`);
+                        } catch (docErr: any) {
+                            console.error(`[Music] ❌ Document fallback also failed: ${docErr.message}`);
+                            await ctx.reply(`⚠️ Downloaded the song, but Telegram rejected both audio and document formats.`);
+                        }
+                    }
+                } catch (err: any) {
+                    console.error(`[Music] ❌ Upload pipeline failed: ${err.message}`);
+                    await ctx.reply(`⚠️ Downloaded the song, but upload failed: ${err.message.slice(0, 150)}`);
                 } finally {
-                    // Clean up the temp file safely
-                    try { 
-                        await Bun.file(result.audioPath).delete(); 
-                        console.log(`[Music] 🧹 Cleaned up temp file`);
-                    } catch {}
+                    // Clean up temp file
+                    try { await Bun.file(result.audioPath).delete(); } catch {}
                 }
             }
 
