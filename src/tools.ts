@@ -129,6 +129,7 @@ export const tools: Tool[] = [
                     parse_mode: "Markdown",
                 });
             }
+            
 
             // 2. Send the audio file
             if (result.audioPath) {
@@ -167,7 +168,7 @@ export const tools: Tool[] = [
             }
 
             return `🎵 Played: ${query}`;
-        },
+        }
     },
     {
         name: "request_file_upload",
