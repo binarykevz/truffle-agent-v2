@@ -147,18 +147,27 @@ await setConfig(key, rest.join(" "));
 await ctx.reply(\`✅ Set \\\`\${key}\\\`\`, { parse_mode: "Markdown" });
 `,
         },
-        {
+                {
             name: "getconfig", description: "View config (owner only)", ownerOnly: true,
             code: `
 if (!(await isOwner(ctx.from.id))) return ctx.reply("⛔ Owner only.");
 const key = ctx.match?.trim();
 if (key) {
     const val = await getConfig(key);
-    await ctx.reply(val === null ? \`❓ \\\`\${key}\\\` not set\` : \`\\\`\${key}\\\` = \\\`\${val}\\\`\`, { parse_mode: "Markdown" });
+    if (val === null) return ctx.reply(\`❓ \\\`\${key}\\\` not set\`);
+    // Mask sensitive values
+    const sensitive = ["api_key", "bot_token", "openclaw_token", "youtube_cookies"];
+    const display = sensitive.includes(key) 
+        ? val.slice(0, 6) + "***" + val.slice(-4) + \` (\${val.length} chars)\`
+        : val;
+    await ctx.reply(\`\\\`\${key}\\\` = \\\`\${display}\\\`\`, { parse_mode: "Markdown" });
 } else {
     const all = await getAllConfig();
     const lines = Object.entries(all).map(([k, v]) => {
-        const masked = ["api_key", "bot_token", "openclaw_token"].includes(k) ? v.slice(0, 6) + "***" + v.slice(-4) : v;
+        const sensitive = ["api_key", "bot_token", "openclaw_token", "youtube_cookies"];
+        const masked = sensitive.includes(k) 
+            ? v.slice(0, 6) + "***" + v.slice(-4) 
+            : v;
         return \`\\\`\${k}\\\` = \\\`\${masked}\\\`\`;
     });
     await ctx.reply("**Config:**\\n" + (lines.join("\\n") || "(empty)"), { parse_mode: "Markdown" });
