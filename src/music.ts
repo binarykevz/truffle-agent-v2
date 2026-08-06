@@ -99,6 +99,137 @@ export function musicKeyboard(videoId: string) {
         .text("🔍 Search Again", "music:search");
 }
 
+/**
+ * Get audio stream URL directly from YouTube's InnerTube API.
+ * Uses Android Music client which bypasses most bot restrictions.
+ */
+async function getStreamUrlDirect(videoId: string): Promise<string | null> {
+    const cookies = await getConfig("youtube_cookies");
+
+    // YouTube InnerTube API key (public, used by all YouTube clients)
+    const apiKey = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
+    const playerUrl = `https://music.youtube.com/youtubei/v1/player?key=${apiKey}`;
+
+    // Try multiple client contexts (Android Music is least restricted)
+    const clients = [
+        {
+            name: "ANDROID_MUSIC",
+            version: "7.27.52",
+            userAgent: "com.google.android.apps.youtube.music/7.27.52 (Linux; U; Android 14; US) gzip",
+            clientNameId: "21",
+            extra: { androidSdkVersion: 34 },
+        },
+        {
+            name: "WEB_REMIX",
+            version: "1.20241127.01.00",
+            userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            clientNameId: "67",
+            extra: {},
+        },
+        {
+            name: "TVHTML5",
+            version: "7.20241126.00.00",
+            userAgent: "Mozilla/5.0 (PlayStation; PlayStation 5/2.50) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0 Safari/605.1.15",
+            clientNameId: "7",
+            extra: {},
+        },
+    ];
+
+    for (const client of clients) {
+        try {
+            console.log(`[Music] Trying ${client.name} player client...`);
+
+            const body = {
+                context: {
+                    client: {
+                        clientName: client.name,
+                        clientVersion: client.version,
+                        hl: "en",
+                        gl: "US",
+                        ...client.extra,
+                    },
+                },
+                videoId: videoId,
+                contentCheckOk: true,
+                racyCheckOk: true,
+            };
+
+            const headers: Record<string, string> = {
+                "Content-Type": "application/json",
+                "User-Agent": client.userAgent,
+                "X-YouTube-Client-Name": client.clientNameId,
+                "X-YouTube-Client-Version": client.version,
+                "Origin": "https://music.youtube.com",
+                "Referer": "https://music.youtube.com/",
+            };
+
+            if (cookies) {
+                headers["Cookie"] = cookies;
+            }
+
+            const response = await fetch(playerUrl, {
+                method: "POST",
+                headers,
+                body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+                console.warn(`[Music] ${client.name} request failed: ${response.status}`);
+                continue;
+            }
+
+            const data = await response.json() as any;
+
+            // Check playability
+            const status = data.playabilityStatus?.status;
+            if (status !== "OK") {
+                console.warn(`[Music] ${client.name}: not playable (${status}) - ${data.playabilityStatus?.reason || "unknown"}`);
+                continue;
+            }
+
+            // Get audio formats
+            const formats = [
+                ...(data.streamingData?.adaptiveFormats || []),
+                ...(data.streamingData?.formats || []),
+            ];
+
+            const audioFormats = formats.filter((f: any) =>
+                f.mimeType?.startsWith("audio/")
+            );
+
+            if (audioFormats.length === 0) {
+                console.warn(`[Music] ${client.name}: no audio formats`);
+                continue;
+            }
+
+            // Sort by bitrate (highest quality first)
+            audioFormats.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+            const bestAudio = audioFormats[0];
+
+            // Direct URL available (Android/TV clients usually provide this)
+            if (bestAudio.url) {
+                console.log(`[Music] ✓ ${client.name}: got direct stream URL (${bestAudio.mimeType}, ${Math.round((bestAudio.bitrate || 0) / 1000)}kbps)`);
+                return bestAudio.url;
+            }
+
+            // Handle signatureCipher (rare with Android client, common with Web)
+            if (bestAudio.signatureCipher) {
+                console.warn(`[Music] ${client.name}: signatureCipher detected, attempting parse`);
+                const params = new URLSearchParams(bestAudio.signatureCipher);
+                const url = params.get("url");
+                if (url) {
+                    return url; // May need signature, but often works
+                }
+            }
+        } catch (err: any) {
+            console.warn(`[Music] ${client.name} error: ${err.message}`);
+        }
+    }
+
+    console.error(`[Music] All player clients failed for ${videoId}`);
+    return null;
+}
+
 // ============================================================
 // SEARCH & PLAY
 // ============================================================
@@ -132,53 +263,22 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
         state.currentIndex = state.queue.length - 1;
         state.isPlaying = true;
 
-        // ============================================================
-        // GET STREAM URL (robust approach with debugging)
+
+// ============================================================
+        // GET STREAM URL (direct InnerTube API approach)
         // ============================================================
         const audioPath = `/tmp/music_${videoId}_${Date.now()}.mp3`;
         let downloadSuccess = false;
         let streamUrl: string | null = null;
 
         try {
-            // Log the song object to see what's available
-            console.log(`[Music] Song object keys: ${Object.keys(song).join(", ")}`);
-            console.log(`[Music] Song videoId: ${song.videoId}`);
-            console.log(`[Music] Song streamUrl: ${song.streamUrl || "NOT PRESENT"}`);
-
             // Method 1: Check if streamUrl is already in search results
-            if (song.streamUrl) {
-                streamUrl = song.streamUrl;
+            if ((song as any).streamUrl) {
+                streamUrl = (song as any).streamUrl;
                 console.log(`[Music] ✓ Stream URL from search results`);
             } else {
-                // Method 2: Try getSong with error handling
-                try {
-                    console.log(`[Music] Attempting getSong(${videoId})...`);
-                    const detailedSong = await yt.getSong(videoId);
-                    
-                    if (detailedSong) {
-                        console.log(`[Music] getSong returned keys: ${Object.keys(detailedSong).join(", ")}`);
-                        if (detailedSong.streamUrl) {
-                            streamUrl = detailedSong.streamUrl;
-                            console.log(`[Music] ✓ Stream URL from getSong()`);
-                        }
-                    } else {
-                        console.warn("[Music] getSong returned null");
-                    }
-                } catch (err: any) {
-                    console.warn(`[Music] getSong failed: ${err.message}`);
-                    
-                    // Method 3: Try getQueue as alternative
-                    try {
-                        console.log(`[Music] Attempting getQueue(${videoId})...`);
-                        const queue = await yt.getQueue(videoId);
-                        if (queue && queue.length > 0 && queue[0].streamUrl) {
-                            streamUrl = queue[0].streamUrl;
-                            console.log(`[Music] ✓ Stream URL from getQueue()`);
-                        }
-                    } catch (queueErr: any) {
-                        console.warn(`[Music] getQueue failed: ${queueErr.message}`);
-                    }
-                }
+                // Method 2: Direct InnerTube player request (bypasses ytmusic-api)
+                streamUrl = await getStreamUrlDirect(videoId);
             }
 
             // Download the audio stream
@@ -198,14 +298,15 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
                     console.log(`[Music] ✓ Downloaded ${size} bytes`);
                     downloadSuccess = size > 10000;
                 } else {
-                    console.warn(`[Music] Stream download failed: ${response.status}`);
+                    console.warn(`[Music] Stream download failed: HTTP ${response.status}`);
                 }
             } else {
-                console.warn("[Music] No stream URL found via any method");
+                console.warn("[Music] No stream URL available");
             }
         } catch (err: any) {
             console.error("[Music] Audio download failed:", err.message);
         }
+        
         
 
         // Build caption
