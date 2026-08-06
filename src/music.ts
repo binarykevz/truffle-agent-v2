@@ -132,19 +132,38 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
         state.currentIndex = state.queue.length - 1;
         state.isPlaying = true;
 
-        // Download audio via stream URL
+        // ============================================================
+        // GET STREAM URL (fixed approach)
+        // ============================================================
         const audioPath = `/tmp/music_${videoId}_${Date.now()}.mp3`;
         let downloadSuccess = false;
+        let streamUrl: string | null = null;
 
         try {
-            console.log(`[Music] Getting stream URL for ${videoId}`);
-            const streamUrl = await yt.getStreamUrl(videoId);
+            // Method 1: Try streamUrl from search results directly
+            if (song.streamUrl) {
+                streamUrl = song.streamUrl;
+                console.log(`[Music] ✓ Stream URL from search results`);
+            } else {
+                // Method 2: Get detailed song info which includes streamUrl
+                console.log(`[Music] Fetching detailed song info...`);
+                const detailedSong = await yt.getSong(videoId);
+                
+                if (detailedSong && detailedSong.streamUrl) {
+                    streamUrl = detailedSong.streamUrl;
+                    console.log(`[Music] ✓ Stream URL from getSong()`);
+                } else {
+                    console.warn("[Music] No stream URL found in song object");
+                }
+            }
 
+            // Download the audio stream
             if (streamUrl) {
                 console.log(`[Music] Downloading audio stream...`);
                 const response = await fetch(streamUrl, {
                     headers: {
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Referer": "https://music.youtube.com/",
                     },
                 });
 
@@ -168,7 +187,7 @@ export async function searchAndPlay(query: string, userId: number): Promise<{
         const album = song.album?.name || "Single";
         const duration = song.duration || 180;
         const thumbnail = song.thumbnails?.[song.thumbnails.length - 1]?.url || 
-                         song.thumbnail || "";
+                         (song as any).thumbnail || "";
 
         const caption = `🎵 **Now Playing**
 
@@ -181,7 +200,7 @@ ${escapeMd(artist)}
 
 ${createProgressBar(0, duration)}
 
-🔊 High Quality AAC${downloadSuccess ? "" : "\n\n⚠️ Audio download failed — try /testcookies"}`;
+🔊 High Quality AAC${downloadSuccess ? "" : "\n\n⚠️ Audio stream unavailable"}`;
 
         return {
             caption,
