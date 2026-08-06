@@ -115,9 +115,14 @@ export const tools: Tool[] = [
             }
 
             // Send photo with caption and keyboard
-            if (result.photo) {
+            try {
                 await ctx.replyWithPhoto(result.photo, {
                     caption: result.caption,
+                    reply_markup: result.keyboard,
+                    parse_mode: "Markdown",
+                });
+            } catch {
+                await ctx.reply(result.caption, {
                     reply_markup: result.keyboard,
                     parse_mode: "Markdown",
                 });
