@@ -94,70 +94,55 @@ export const tools: Tool[] = [
             const apps = await listInstalledApps();
             return apps.length === 0 ? "No apps." : `Apps (${apps.length}):\n${apps.slice(0, 100).join("\n")}`;
         }
-    },
-    {
-           
+    },    {
         name: "play_music",
-        description: "Search and play music. Returns audio file and stylish player interface.",
+        description: "Search and play music from Truffle Music API. Sends audio file with album art and metadata.",
         parameters: {
             type: "object",
             properties: {
-                query: { type: "string", description: "Song name, artist, or lyrics to search" },
+                query: { type: "string", description: "Song name or artist to search" },
             },
             required: ["query"],
         },
-               execute: async ({ query }, ctx) => {
+        execute: async ({ query }, ctx) => {
             await ctx.replyWithChatAction("upload_voice");
-            
+
             const result = await searchAndPlay(query, ctx.from!.id);
-            
+
             if (!result) {
                 return "❌ No songs found. Try a different search.";
             }
 
-            // 1. Send photo with caption and keyboard
-            try {
-                await ctx.replyWithPhoto(result.photo, {
-                    caption: result.caption,
-                    reply_markup: result.keyboard,
-                    parse_mode: "Markdown",
-                });
-            } catch (err: any) {
-                console.warn(`[Music] Photo send failed, falling back to text: ${err.message}`);
-                await ctx.reply(result.caption, {
-                    reply_markup: result.keyboard,
-                    parse_mode: "Markdown",
-                });
+            if (!result.audioPath) {
+                return `❌ Found "${result.title}" but the download failed.`;
             }
 
-            // 2. Send the audio file
-            if (result.audioPath) {
-                try {
-                    const bunFile = Bun.file(result.audioPath);
-                    const fileSize = bunFile.size;
-                    console.log(`[Music] 📤 Preparing upload: ${result.audioPath} (${fileSize} bytes)`);
-                    
-                    if (fileSize < 10000) {
-                        throw new Error("File is too small, likely an error response");
-                    }
+            try {
+                const bunFile = Bun.file(result.audioPath);
+                const buffer = await bunFile.arrayBuffer();
 
-                    // Read the entire file into memory (avoids Bun stream lock issues with Grammy)
-                    const buffer = await bunFile.arrayBuffer();
-                    
-                    // 🕵️ Detective check: Is it actually audio, or an HTML/JSON error page?
-                    const header = new TextDecoder().decode(buffer.slice(0, 100));
-                    if (header.trim().startsWith("<") || header.trim().startsWith("{") || header.trim().startsWith("[")) {
-                        console.error(`[Music] ❌ Downloaded file is NOT audio! First 100 chars:\n${header}`);
-                        await ctx.reply("⚠️ The download API returned a text/JSON error instead of an audio file.");
-                        return `Played: ${query} (but audio file was invalid)`;
-                    }
+                // Verify it's actually audio, not an error page
+                const header = new TextDecoder().decode(buffer.slice(0, 100));
+                if (header.trim().startsWith("<") || header.trim().startsWith("{") || header.trim().startsWith("[")) {
+                    console.error(`[Music] ❌ Not audio. Header: ${header.slice(0, 50)}`);
+                    return "❌ The API returned an error instead of audio.";
+                }
 
-                    // Create InputFile with explicit filename and binary Uint8Array
-                    const safeName = `${query.replace(/[^\w\s.-]/gi, '').slice(0, 50)}.mp3`;
-                    const inputFile = new InputFile(new Uint8Array(buffer), safeName);
-                    
-                    // Try sending as Audio first
-                                   // Send single audio message with album art (HD thumbnail)
+                const safeName = `${result.title.replace(/[^\w\s.-]/gi, '').slice(0, 60)}.mp3`;
+                const inputFile = new InputFile(new Uint8Array(buffer), safeName);
+
+                // Build minimalist caption
+                const captionParts = [
+                    `🎵 ${result.title}`,
+                    `👤 ${result.artist}`,
+                    `⏱ ${result.duration}`,
+                ];
+                if (result.description) {
+                    captionParts.push(`\n${result.description.slice(0, 200)}`);
+                }
+                const caption = captionParts.join("\n");
+
+                // Send audio with HD thumbnail
                 try {
                     await ctx.replyWithAudio(inputFile, {
                         caption: caption,
@@ -166,37 +151,27 @@ export const tools: Tool[] = [
                         duration: result.durationSec,
                         thumbnail: { url: result.thumbnail },
                     });
+                    console.log(`[Music] ✅ Sent: ${result.title}`);
                 } catch (thumbErr: any) {
-                    // If the thumbnail URL was rejected, retry without it
-                    console.warn(`[Music] ⚠️ Thumbnail rejected (${thumbErr.message}), retrying without album art`);
+                    // If thumbnail rejected, retry without it
+                    console.warn(`[Music] ⚠️ Thumbnail rejected: ${thumbErr.message}`);
                     await ctx.replyWithAudio(inputFile, {
                         caption: caption,
                         title: result.title,
                         performer: result.artist,
                         duration: result.durationSec,
                     });
+                    console.log(`[Music] ✅ Sent without thumbnail`);
                 }
-                }, {
-                        // Fallback to Document (bypasses Telegram's strict audio header checks)
-                        try {
-                            await ctx.replyWithDocument(inputFile);
-                            console.log(`[Music] ✅ Document fallback sent successfully`);
-                        } catch (docErr: any) {
-                            console.error(`[Music] ❌ Document fallback also failed: ${docErr.message}`);
-                            await ctx.reply(`⚠️ Downloaded the song, but Telegram rejected both audio and document formats.`);
-                        }
-                }
-                } catch (err: any) {
-                    console.error(`[Music] ❌ Upload pipeline failed: ${err.message}`);
-                    await ctx.reply(`⚠️ Downloaded the song, but upload failed: ${err.message.slice(0, 150)}`);
-                } finally {
-                    // Clean up temp file
-                    try { await Bun.file(result.audioPath).delete(); } catch {}
-                }
+            } catch (err: any) {
+                console.error(`[Music] Upload failed: ${err.message}`);
+                return `❌ Failed to send audio: ${err.message.slice(0, 100)}`;
+            } finally {
+                try { await Bun.file(result.audioPath).delete(); } catch {}
             }
 
-            return `🎵 Played: ${query}`;
-        }
+            return `🎵 Played: ${result.title}`;
+        },
     },
     {
         name: "request_file_upload",
