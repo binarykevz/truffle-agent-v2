@@ -1,4 +1,4 @@
-import { Context, nputFile } from "grammy";
+import { Context, InputFile } from "grammy";
 import * as cheerio from "cheerio";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
