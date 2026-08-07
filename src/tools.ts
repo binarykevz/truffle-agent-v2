@@ -176,7 +176,7 @@ export const tools: Tool[] = [
                         duration: result.durationSec,
                     });
                 }
-                }
+                }, {
                         // Fallback to Document (bypasses Telegram's strict audio header checks)
                         try {
                             await ctx.replyWithDocument(inputFile);
