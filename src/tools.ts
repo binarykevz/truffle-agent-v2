@@ -157,16 +157,25 @@ export const tools: Tool[] = [
                     const inputFile = new InputFile(new Uint8Array(buffer), safeName);
                     
                     // Try sending as Audio first
-                    try {
-                        await ctx.replyWithAudio(inputFile, {
-                            title: query.slice(0, 255),
-                            performer: "Truffle Music",
-                        });
-                        console.log(`[Music] ✅ Audio successfully sent to Telegram`);
-                    } catch (audioErr: any) {
-                        // Log the exact Telegram error
-                        console.warn(`[Music] ⚠️ replyWithAudio failed: ${audioErr.description || audioErr.message}`);
-                        
+                                   // Send single audio message with album art (HD thumbnail)
+                try {
+                    await ctx.replyWithAudio(inputFile, {
+                        caption: caption,
+                        title: result.title,
+                        performer: result.artist,
+                        duration: result.durationSec,
+                        thumbnail: { url: result.thumbnail },
+                    });
+                } catch (thumbErr: any) {
+                    // If the thumbnail URL was rejected, retry without it
+                    console.warn(`[Music] ⚠️ Thumbnail rejected (${thumbErr.message}), retrying without album art`);
+                    await ctx.replyWithAudio(inputFile, {
+                        caption: caption,
+                        title: result.title,
+                        performer: result.artist,
+                        duration: result.durationSec,
+                    });
+                }
                         // Fallback to Document (bypasses Telegram's strict audio header checks)
                         try {
                             await ctx.replyWithDocument(inputFile);
