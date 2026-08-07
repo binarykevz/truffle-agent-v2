@@ -176,6 +176,7 @@ export const tools: Tool[] = [
                         duration: result.durationSec,
                     });
                 }
+                }
                         // Fallback to Document (bypasses Telegram's strict audio header checks)
                         try {
                             await ctx.replyWithDocument(inputFile);
@@ -184,7 +185,7 @@ export const tools: Tool[] = [
                             console.error(`[Music] ❌ Document fallback also failed: ${docErr.message}`);
                             await ctx.reply(`⚠️ Downloaded the song, but Telegram rejected both audio and document formats.`);
                         }
-                    
+                }
                 } catch (err: any) {
                     console.error(`[Music] ❌ Upload pipeline failed: ${err.message}`);
                     await ctx.reply(`⚠️ Downloaded the song, but upload failed: ${err.message.slice(0, 150)}`);
